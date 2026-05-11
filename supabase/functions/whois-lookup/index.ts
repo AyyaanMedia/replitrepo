@@ -6,7 +6,14 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const APILAYER_KEY = "XnnV0ZeQgdqv0d5oyabS6YtCPcra6co6";
+// Multiple APILayer accounts — rotates on 429 (rate limit) for effectively unlimited lookups
+const APILAYER_KEYS = [
+  "XnnV0ZeQgdqv0d5oyabS6YtCPcra6co6",
+  Deno.env.get("APILAYER_KEY_2") || "",
+  Deno.env.get("APILAYER_KEY_3") || "",
+  Deno.env.get("APILAYER_KEY_4") || "",
+  Deno.env.get("APILAYER_KEY_5") || "",
+].filter(Boolean);
 
 interface WhoisResult {
   found: boolean;
@@ -41,35 +48,43 @@ function isValidEmail(e: string | null | undefined): boolean {
   return !!e && e.includes("@") && !e.startsWith("@") && e.length > 5;
 }
 
-// ── Source 1: APILayer WHOIS (primary — returns real registrant email) ────────
+// ── Source 1: APILayer WHOIS — tries each key in order, skips on 429 ──────────
 async function fromApiLayer(domain: string): Promise<WhoisResult> {
-  try {
-    const res = await fetch(`https://api.apilayer.com/whois/query?domain=${encodeURIComponent(domain)}`, {
-      signal: AbortSignal.timeout(10000),
-      headers: { apikey: APILAYER_KEY },
-    });
-    if (!res.ok) return EMPTY;
-    const json = await res.json();
-    const d = json?.result;
-    if (!d || !d.domain_name) return EMPTY;
+  for (const key of APILAYER_KEYS) {
+    try {
+      const res = await fetch(`https://api.apilayer.com/whois/query?domain=${encodeURIComponent(domain)}`, {
+        signal: AbortSignal.timeout(10000),
+        headers: { apikey: key },
+      });
 
-    // Pick best email: registrant > admin > tech > registrar
-    const email =
-      isValidEmail(d.registrant_email) ? d.registrant_email :
-      isValidEmail(d.admin_email) ? d.admin_email :
-      isValidEmail(d.tech_email) ? d.tech_email :
-      isValidEmail(d.registrar_email) ? d.registrar_email :
-      null;
+      // Rate limited — try next key
+      if (res.status === 429) continue;
 
-    return {
-      found: true,
-      expiresOn: formatDate(d.expiration_date),
-      registrar: d.registrar || null,
-      registrantName: d.registrant_name || d.registrant_organization || null,
-      registrantOrg: d.registrant_organization || null,
-      email,
-    };
-  } catch { return EMPTY; }
+      if (!res.ok) return EMPTY;
+
+      const json = await res.json();
+      const d = json?.result;
+      if (!d || !d.domain_name) return EMPTY;
+
+      // Pick best email: registrant > admin > tech > registrar
+      const email =
+        isValidEmail(d.registrant_email) ? d.registrant_email :
+        isValidEmail(d.admin_email) ? d.admin_email :
+        isValidEmail(d.tech_email) ? d.tech_email :
+        isValidEmail(d.registrar_email) ? d.registrar_email :
+        null;
+
+      return {
+        found: true,
+        expiresOn: formatDate(d.expiration_date),
+        registrar: d.registrar || null,
+        registrantName: d.registrant_name || d.registrant_organization || null,
+        registrantOrg: d.registrant_organization || null,
+        email,
+      };
+    } catch { continue; }
+  }
+  return EMPTY;
 }
 
 // ── Source 2: RDAP via nic.us (fallback — expiry/registrar when APILayer misses) ─
@@ -164,7 +179,6 @@ Deno.serve(async (req: Request) => {
 
     const clean = domain.trim().toLowerCase();
 
-    // Run both sources in parallel
     const [apiLayer, rdap] = await Promise.allSettled([
       fromApiLayer(clean),
       fromRdap(clean),
