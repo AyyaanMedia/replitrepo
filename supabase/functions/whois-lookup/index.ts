@@ -9,11 +9,7 @@ const corsHeaders = {
 // Multiple APILayer accounts — rotates on 429 (rate limit) for effectively unlimited lookups
 const APILAYER_KEYS = [
   "XnnV0ZeQgdqv0d5oyabS6YtCPcra6co6",
-  Deno.env.get("APILAYER_KEY_2") || "",
-  Deno.env.get("APILAYER_KEY_3") || "",
-  Deno.env.get("APILAYER_KEY_4") || "",
-  Deno.env.get("APILAYER_KEY_5") || "",
-].filter(Boolean);
+];
 
 interface WhoisResult {
   found: boolean;
