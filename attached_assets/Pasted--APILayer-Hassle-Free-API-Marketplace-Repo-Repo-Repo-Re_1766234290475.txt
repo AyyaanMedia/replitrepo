@@ -1,0 +1,160 @@
+
+APILayer | Hassle Free API Marketplace Repo Repo
+
+    Repo Repo
+
+Mary Riley
+
+    API Marketplace
+    Dev Tools
+    Whois API
+
+Whois API
+Whois API
+API to perform a Whois query programmatically and get results in JSON format.
+APILayer
+APILayer
+Review rating
+Review rating
+Review rating
+Review rating
+Review rating
+Your plan: Free Plan
+API Key:
+XnnV0ZeQgdqv0d5oyabS6YtCPcra6co6
+
+    Subscription
+    API info
+    Documentation
+    Reviews
+
+Whois API Reference
+
+This API is organized around REST. Our API has predictable resource-oriented URLs, accepts form-encoded request bodies, returns JSON-encoded responses, and uses standard HTTP response codes, authentication, and verbs.
+
+    Just Getting Started?
+
+    Check out our development quickstart guide.
+
+Authentication
+
+Whois API uses API keys to authenticate requests. You can view and manage your API keys in the Accounts page.
+
+Your API keys carry many privileges, so be sure to keep them secure! Do not share your secret API keys in publicly accessible areas such as GitHub, client-side code, and so forth.
+
+All requests made to the API must hold a custom HTTP header named "apikey". Implementation differs with each programming language. Below are some samples.
+
+All API requests must be made over HTTPS. Calls made over plain HTTP will fail. API requests without authentication will also fail.
+Endpoints
+
+Check if a domain name is available for purchase or not
+Parameters
+
+domain (required)
+
+Domain to check
+
+Location: Query, Data Type: string
+** A word enclosed with curly brackets "{ }" in the code means that it is a parameter and it should be replaced with your own values when executing. (also overwriting the curly brackets).
+Returns
+
+Below is a sample response from the endpoint
+
+If you wish to play around interactively with real values and run code, see...
+Rate Limiting
+
+Each subscription has its own rate limit. When you become a member, you start by choosing a rate limit that suits your usage needs. Do not worry; You can upgrade or downgrade your plan at any time. For this reason, instead of starting with a larger plan that you do not need, we can offer you to upgrade your plan after you start with "free" or "gold plan" options and start using the API.
+
+You are currently subscribed to this API with a "". Your subscription has two types of restrictions: "daily" and "monthly" rate limits. These are:
+Limit 	Allocated 	Used *
+Daily 	3,000 	0
+Monthly 	3,000 	0
+* Updated every 15 minutes.
+
+When you reach a rate limit (both daily and monthly), the service will stop responding and returning the HTTP 429 response status code (Too many requests) for each request with the following JSON string body text.
+
+{
+    "message":"You have exceeded your daily\/monthly API rate limit. Please review and upgrade your subscription plan at https:\/\/apilayer.com\/subscriptions to continue."
+    }
+
+A reminder email will be sent to you when your API usage reaches both 80% and 90%, so that you can take immediate actions such as upgrading your plan in order to prevent your application using the API from being interrupted.
+
+You can also programmatically check your rate limit yourself. As a result of each request made to the APILayer, the following 4 fields provide you with all the necessary information within the HTTP Headers.
+
+x-ratelimit-limit-month: Request limit per month
+x-ratelimit-remaining-month: Request limit remaining this month
+x-ratelimit-limit-day: Request limit per day
+x-ratelimit-remaining-day: Request limit remaining today
+
+You can contact our support unit if you need any assistance with your application regarding to handle the returned result by looking at the header information.
+Error Codes
+
+APILayer uses standard HTTP response codes to indicate the success or failure of an API request. In general: Codes in the 2xx range indicate success. Codes in the 4xx range indicate a clientside error, which means that failed given the information provided (e.g., a missing parameter, unauthorized access etc.). Codes in the 5xx range indicate an error with APILayer's servers (normally this should'nt happen at all).
+
+If the response code is not 200, it means the operation failed somehow and you may need to take an action accordingly. You can check the response (which will be in JSON format) for a field called 'message' that briefly explains the error reported.
+
+Status Code 	Explanation
+400 - Bad Request 	The request was unacceptable, often due to missing a required parameter.
+401 - Unauthorized 	No valid API key provided.
+404 - Not Found 	The requested resource doesn't exist.
+429 - Too many requests 	API request limit exceeded. See section Rate Limiting for more info.
+5xx - Server Error 	We have failed to process your request. (You can contact us anytime)
+
+You can always contact for support and ask for more assistance. We'll be glad to assist you with building your product.
+Contents:
+
+    Authentication
+    Endpoints
+    Rate Limiting
+    Error Codes
+
+Related Products
+Spam Check API
+Spam Check API
+Marketing
+Meta Tags API
+Meta Tags API
+Scraping
+IP to Location API
+IP to Location API
+Geolocation
+uNoGS API
+uNoGS API
+Scraping
+Image to Text API
+Image to Text API
+Photos / Pictures
+Review rating Review rating Review rating Review rating Review rating
+In Memory DB API
+In Memory DB API
+Dev Tools
+API Layer Logo
+Explore Products
+
+    General
+    Marketplace
+    About
+    Documentation
+
+    Support
+    Contact Sales
+    Helpdesk
+    API Glossary
+
+Connect
+footer-instagram-icon
+footer-facebook-icon
+footer-linkedin-icon
+footer-twitter-icon
+footer-youtube-icon
+footer-github-icon
+
+Newsletter
+
+Join our newsletter to receive the latest API insights, tips, and updates straight to your inbox.
+
+© 2025 All rights reserved
+Privacy Policy
+Imprint
+Terms
+Cookie Preferences
