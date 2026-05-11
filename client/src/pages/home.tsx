@@ -1,18 +1,62 @@
-import { useState, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
-} from "@/components/ui/table";
-import { Download, Search, Trash2, Loader as Loader2 } from "lucide-react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { Download, Search, Trash2, Globe, Zap, CircleCheck as CheckCircle2, Circle as XCircle, CircleAlert as AlertCircle, Clock, RefreshCw } from "lucide-react";
 import { type WhoisResult } from "@shared/schema";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+function parseDomains(input: string): string[] {
+  return input
+    .split(/[\n,\s]+/)
+    .map((d) => d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, ""))
+    .filter((d) => d.length > 0)
+    .map((d) => (d.endsWith(".us") ? d.slice(0, -3) : d))
+    .filter((d, i, arr) => arr.indexOf(d) === i);
+}
+
+function StatusBadge({ status }: { status: WhoisResult["status"] }) {
+  switch (status) {
+    case "found":
+      return (
+        <span className="badge-found inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium">
+          <CheckCircle2 size={11} /> Found
+        </span>
+      );
+    case "not_found":
+      return (
+        <span className="badge-not-found inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium">
+          <XCircle size={11} /> Not Found
+        </span>
+      );
+    case "error":
+      return (
+        <span className="badge-error inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium">
+          <AlertCircle size={11} /> Error
+        </span>
+      );
+    case "checking":
+      return (
+        <span className="badge-checking inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium">
+          <RefreshCw size={11} className="animate-spin" /> Checking
+        </span>
+      );
+    default:
+      return (
+        <span className="badge-pending inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium">
+          <Clock size={11} /> Pending
+        </span>
+      );
+  }
+}
+
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{ background: "var(--surface-2)", border: "1px solid var(--line)" }} className="rounded-lg px-4 py-3 flex flex-col gap-0.5 min-w-[80px]">
+      <span className="text-xs font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>{label}</span>
+      <span className="text-xl font-bold mono" style={{ color }}>{value}</span>
+    </div>
+  );
+}
 
 export default function Home() {
   const [domainInput, setDomainInput] = useState("");
@@ -20,35 +64,30 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const tableRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<boolean>(false);
 
-  const parseDomains = (input: string): string[] => {
-    return input
-      .split(/[\n,]/)
-      .map((d) => d.trim().toLowerCase())
-      .filter((d) => d.length > 0)
-      .map((d) => {
-        // Remove .us if already present, we'll add it consistently
-        if (d.endsWith(".us")) {
-          return d.slice(0, -3);
-        }
-        return d;
-      })
-      .filter((d, index, arr) => arr.indexOf(d) === index); // Remove duplicates
-  };
+  const domains = parseDomains(domainInput);
+  const domainCount = domains.length;
 
-  const domainCount = parseDomains(domainInput).length;
+  const completedCount = results.filter((r) => ["found", "not_found", "error"].includes(r.status)).length;
+  const foundCount = results.filter((r) => r.status === "found").length;
+  const notFoundCount = results.filter((r) => r.status === "not_found").length;
+  const errorCount = results.filter((r) => r.status === "error").length;
+
+  const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   const handleSearch = useCallback(async () => {
-    const domains = parseDomains(domainInput);
-    if (domains.length === 0) return;
+    const domList = parseDomains(domainInput);
+    if (domList.length === 0) return;
 
+    abortRef.current = false;
     setIsSearching(true);
     setProcessedCount(0);
-    setTotalCount(domains.length);
-    
-    // Initialize results with pending status
-    const initialResults: WhoisResult[] = domains.map((domain) => ({
-      domain: `${domain}.us`,
+    setTotalCount(domList.length);
+
+    const initialResults: WhoisResult[] = domList.map((d) => ({
+      domain: `${d}.us`,
       status: "pending",
       expiresOn: null,
       registrar: null,
@@ -57,311 +96,292 @@ export default function Home() {
     }));
     setResults(initialResults);
 
-    // Process domains one by one for real-time updates
-    for (let i = 0; i < domains.length; i++) {
-      const domain = domains[i];
-      
-      // Update status to checking
+    // Process in parallel batches of 3 for speed without overwhelming
+    const BATCH = 3;
+    let processed = 0;
+
+    for (let i = 0; i < domList.length; i += BATCH) {
+      if (abortRef.current) break;
+      const batch = domList.slice(i, i + BATCH);
+      const batchIndexes = batch.map((_, j) => i + j);
+
+      // Mark batch as checking
       setResults((prev) =>
-        prev.map((r, idx) =>
-          idx === i ? { ...r, status: "checking" } : r
-        )
+        prev.map((r, idx) => batchIndexes.includes(idx) ? { ...r, status: "checking" } : r)
       );
 
-      try {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        const response = await fetch(`${supabaseUrl}/functions/v1/whois-lookup`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseAnonKey}`,
-            "Apikey": supabaseAnonKey,
-          },
-          body: JSON.stringify({ domain: `${domain}.us` }),
-        });
-
-        const data = await response.json();
-        
-        setResults((prev) =>
-          prev.map((r, idx) =>
-            idx === i
-              ? {
-                  ...r,
-                  status: data.status,
-                  expiresOn: data.expiresOn,
-                  registrar: data.registrar,
-                  email: data.email,
-                  errorMessage: data.errorMessage,
-                }
-              : r
-          )
-        );
-      } catch (error) {
-        setResults((prev) =>
-          prev.map((r, idx) =>
-            idx === i
-              ? { ...r, status: "error", errorMessage: "Request failed" }
-              : r
-          )
-        );
-      }
-
-      setProcessedCount(i + 1);
+      await Promise.all(
+        batch.map(async (domain, j) => {
+          const idx = i + j;
+          try {
+            const res = await fetch(`${SUPABASE_URL}/functions/v1/whois-lookup`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+                "Apikey": SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({ domain: `${domain}.us` }),
+            });
+            const data = await res.json();
+            setResults((prev) =>
+              prev.map((r, i2) =>
+                i2 === idx ? { ...r, status: data.status, expiresOn: data.expiresOn, registrar: data.registrar, email: data.email, errorMessage: data.errorMessage } : r
+              )
+            );
+          } catch {
+            setResults((prev) =>
+              prev.map((r, i2) => i2 === idx ? { ...r, status: "error", errorMessage: "Request failed" } : r)
+            );
+          }
+          processed++;
+          setProcessedCount(processed);
+        })
+      );
     }
 
     setIsSearching(false);
   }, [domainInput]);
 
+  const handleStop = () => {
+    abortRef.current = true;
+  };
+
   const handleClear = () => {
+    abortRef.current = true;
     setDomainInput("");
     setResults([]);
     setProcessedCount(0);
     setTotalCount(0);
-  };
-
-  const handleClearResults = () => {
-    setResults([]);
-    setProcessedCount(0);
-    setTotalCount(0);
+    setIsSearching(false);
   };
 
   const downloadCSV = () => {
-    const completedResults = results.filter(
-      (r) => r.status === "found" || r.status === "not_found"
-    );
-    
-    if (completedResults.length === 0) return;
-
-    const headers = ["Domain", "Status", "Expires On", "Registrar", "Email"];
-    const rows = completedResults.map((r) => [
-      r.domain,
-      r.status,
-      r.expiresOn || "",
-      r.registrar || "",
-      r.email || "",
-    ]);
-
-    const csvContent = [
-      headers.join(","),
-      ...rows.map((row) =>
-        row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(",")
+    const rows = results.filter((r) => r.status === "found" || r.status === "not_found");
+    if (rows.length === 0) return;
+    const csv = [
+      ["Domain", "Status", "Expires On", "Registrar", "Email"].join(","),
+      ...rows.map((r) =>
+        [r.domain, r.status, r.expiresOn || "", r.registrar || "", r.email || ""]
+          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+          .join(",")
       ),
     ].join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `whois-results-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    a.download = `whois-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
   };
 
-  const getStatusBadge = (result: WhoisResult) => {
-    switch (result.status) {
-      case "pending":
-        return (
-          <Badge variant="secondary" className="gap-1" data-testid={`status-pending-${result.domain}`}>
-            Pending
-          </Badge>
-        );
-      case "checking":
-        return (
-          <Badge variant="secondary" className="gap-1 animate-pulse" data-testid={`status-checking-${result.domain}`}>
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Checking
-          </Badge>
-        );
-      case "found":
-        return (
-          <Badge className="bg-emerald-600 dark:bg-emerald-700" data-testid={`status-found-${result.domain}`}>
-            Found
-          </Badge>
-        );
-      case "not_found":
-        return (
-          <Badge variant="outline" data-testid={`status-not-found-${result.domain}`}>
-            Not Found
-          </Badge>
-        );
-      case "error":
-        return (
-          <Badge variant="destructive" data-testid={`status-error-${result.domain}`}>
-            Error
-          </Badge>
-        );
-      default:
-        return null;
+  // Scroll results into view when they appear
+  useEffect(() => {
+    if (results.length > 0 && tableRef.current) {
+      tableRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  };
-
-  const completedCount = results.filter(
-    (r) => r.status === "found" || r.status === "not_found" || r.status === "error"
-  ).length;
-  const foundCount = results.filter((r) => r.status === "found").length;
+  }, [results.length > 0]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-semibold text-foreground" data-testid="text-title">
-            Bulk WHOIS Lookup
+    <div className="min-h-screen grid-bg" style={{ background: "var(--surface)" }}>
+      {/* Scan line effect */}
+      <div className="scanline" />
+
+      {/* Header */}
+      <header style={{ borderBottom: "1px solid var(--line)", background: "rgba(15,17,23,0.8)" }} className="sticky top-0 z-50 backdrop-blur-sm">
+        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="logo-mark">
+              <Globe size={16} style={{ color: "var(--cyan)" }} />
+            </div>
+            <div>
+              <span className="font-semibold text-sm tracking-tight" style={{ color: "hsl(var(--foreground))" }}>
+                Domain Scout
+              </span>
+              <span className="text-xs ml-2 mono" style={{ color: "hsl(var(--muted-foreground))" }}>.us WHOIS</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="pulse-dot" />
+            <span className="text-xs mono" style={{ color: "hsl(var(--muted-foreground))" }}>live</span>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-6 py-10">
+
+        {/* Hero */}
+        <div className="fade-in mb-10 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium mb-4 mono"
+            style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.18)", color: "var(--cyan)" }}>
+            <Zap size={11} /> Parallel RDAP + WHOIS lookups · No API key required
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight mb-2" style={{ color: "hsl(var(--foreground))" }}>
+            Bulk .us Domain{" "}
+            <span className="glow-text" style={{ color: "var(--cyan)" }}>WHOIS Scout</span>
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Enter .us domain names to look up registration details using multiple sources (RDAP, WHOIS)
+          <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
+            Look up registration details, expiry dates, and contact emails for multiple .us domains at once
           </p>
         </div>
 
-        {/* Input Section */}
-        <Card className="mb-6">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg font-semibold">Domain Names</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Textarea
-              placeholder="Enter domain names (one per line, without .us extension)&#10;Example:&#10;example&#10;mydomain&#10;testsite"
-              className="h-40 font-mono text-sm resize-none"
+        {/* Input card */}
+        <div className="fade-in fade-in-delay-1 input-card rounded-xl mb-6 transition-all"
+          style={{ background: "var(--surface-2)", border: "1px solid var(--line)" }}>
+          <div className="px-5 pt-5 pb-3 flex items-center justify-between border-b" style={{ borderColor: "var(--line)" }}>
+            <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Domain Input</span>
+            <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "rgba(14,165,233,0.1)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.2)" }}>
+              {domainCount} domain{domainCount !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="p-5 space-y-4">
+            <textarea
+              className="domain-input w-full rounded-lg p-3"
+              style={{ height: "140px" }}
+              placeholder={"example\nmydomain\ntestsite\n\n# One per line or comma-separated, .us added automatically"}
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
               disabled={isSearching}
               data-testid="input-domains"
             />
-            
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <p className="text-sm text-muted-foreground" data-testid="text-domain-count">
-                {domainCount} domain{domainCount !== 1 ? "s" : ""} ready
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs mono" style={{ color: "hsl(var(--muted-foreground))" }} data-testid="text-domain-count">
+                {domainCount > 0 ? `${domainCount} unique domain${domainCount !== 1 ? "s" : ""} ready` : "Enter domains above"}
               </p>
-              
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="secondary"
+              <div className="flex gap-2">
+                <button
                   onClick={handleClear}
-                  disabled={isSearching || (domainInput === "" && results.length === 0)}
+                  disabled={domainInput === "" && results.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                  style={{ background: "var(--surface-3)", border: "1px solid var(--line)", color: "hsl(var(--muted-foreground))" }}
                   data-testid="button-clear"
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Clear
-                </Button>
-                <Button
-                  onClick={handleSearch}
-                  disabled={isSearching || domainCount === 0}
-                  data-testid="button-search"
-                >
-                  {isSearching ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Search className="h-4 w-4 mr-2" />
-                  )}
-                  {isSearching ? "Searching..." : "Start Search"}
-                </Button>
+                  <Trash2 size={14} /> Clear
+                </button>
+                {isSearching ? (
+                  <button
+                    onClick={handleStop}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium"
+                    style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#f87171" }}
+                  >
+                    <XCircle size={14} /> Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSearch}
+                    disabled={domainCount === 0}
+                    className="btn-primary inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white"
+                    data-testid="button-search"
+                  >
+                    <Search size={14} /> Start Search
+                  </button>
+                )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        {/* Results Section */}
-        {(results.length > 0 || isSearching) && (
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <CardTitle className="text-lg font-semibold">Results</CardTitle>
-                  {isSearching ? (
-                    <p className="text-sm text-muted-foreground" data-testid="text-progress">
-                      Searching... {processedCount} of {totalCount} domains processed
-                    </p>
-                  ) : (
-                    <p className="text-sm text-muted-foreground" data-testid="text-summary">
-                      Found {foundCount} domain{foundCount !== 1 ? "s" : ""} | {completedCount} complete
-                    </p>
-                  )}
-                </div>
-                
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleClearResults}
-                    disabled={isSearching || results.length === 0}
-                    data-testid="button-clear-results"
-                  >
-                    Clear Results
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={downloadCSV}
-                    disabled={foundCount === 0}
-                    data-testid="button-download"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download CSV
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/50">
-                      <TableHead className="font-semibold">Domain</TableHead>
-                      <TableHead className="font-semibold">Status</TableHead>
-                      <TableHead className="font-semibold">Expires On</TableHead>
-                      <TableHead className="font-semibold">Registrar</TableHead>
-                      <TableHead className="font-semibold">Email</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {results.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                          Results will appear here as domains are processed
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      results.map((result, index) => (
-                        <TableRow
-                          key={result.domain}
-                          className={index % 2 === 0 ? "bg-background" : "bg-muted/30"}
-                          data-testid={`row-result-${result.domain}`}
-                        >
-                          <TableCell className="font-mono text-sm" data-testid={`text-domain-${result.domain}`}>
-                            {result.domain}
-                          </TableCell>
-                          <TableCell>
-                            {getStatusBadge(result)}
-                          </TableCell>
-                          <TableCell className="font-mono text-sm" data-testid={`text-expires-${result.domain}`}>
-                            {result.expiresOn || "—"}
-                          </TableCell>
-                          <TableCell className="text-sm" data-testid={`text-registrar-${result.domain}`}>
-                            {result.registrar || "—"}
-                          </TableCell>
-                          <TableCell className="text-sm" data-testid={`text-email-${result.domain}`}>
-                            {result.email || "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Progress bar */}
+        {isSearching && (
+          <div className="fade-in mb-6 rounded-xl p-4" style={{ background: "var(--surface-2)", border: "1px solid var(--line)" }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium" style={{ color: "hsl(var(--foreground))" }}>
+                Scanning domains...
+              </span>
+              <span className="mono text-xs" style={{ color: "var(--cyan)" }}>
+                {processedCount} / {totalCount} · {progressPct}%
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--line)" }}>
+              <div
+                className="h-full rounded-full progress-shimmer transition-all duration-500"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
         )}
 
-        {/* Empty State */}
+        {/* Stats row */}
+        {results.length > 0 && (
+          <div className="fade-in flex flex-wrap items-center gap-3 mb-5">
+            <StatCard label="Total" value={results.length} color="hsl(var(--foreground))" />
+            <StatCard label="Found" value={foundCount} color="var(--green)" />
+            <StatCard label="Not Found" value={notFoundCount} color="#94a3b8" />
+            {errorCount > 0 && <StatCard label="Error" value={errorCount} color="var(--red)" />}
+            <div className="flex-1" />
+            {(foundCount > 0 || notFoundCount > 0) && !isSearching && (
+              <button
+                onClick={downloadCSV}
+                disabled={foundCount === 0}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.2)", color: "var(--cyan)" }}
+                data-testid="button-download"
+              >
+                <Download size={14} /> Export CSV
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Results table */}
+        {results.length > 0 && (
+          <div ref={tableRef} className="fade-in rounded-xl overflow-hidden" style={{ border: "1px solid var(--line)" }}>
+            <div className="overflow-x-auto">
+              <table className="data-table w-full">
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left" }}>#</th>
+                    <th style={{ textAlign: "left" }}>Domain</th>
+                    <th style={{ textAlign: "left" }}>Status</th>
+                    <th style={{ textAlign: "left" }}>Expires</th>
+                    <th style={{ textAlign: "left" }}>Registrar</th>
+                    <th style={{ textAlign: "left" }}>Email</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((r, idx) => (
+                    <tr key={r.domain} className="row-animate" style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }} data-testid={`row-result-${r.domain}`}>
+                      <td className="mono" style={{ color: "hsl(var(--muted-foreground))", width: "40px" }}>{idx + 1}</td>
+                      <td className="mono font-medium" style={{ color: "hsl(var(--foreground))" }} data-testid={`text-domain-${r.domain}`}>
+                        {r.domain}
+                      </td>
+                      <td><StatusBadge status={r.status} /></td>
+                      <td className="mono text-xs" style={{ color: r.expiresOn ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }} data-testid={`text-expires-${r.domain}`}>
+                        {r.expiresOn || "—"}
+                      </td>
+                      <td className="text-xs" style={{ color: r.registrar ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "200px" }} data-testid={`text-registrar-${r.domain}`}>
+                        <span className="truncate block" title={r.registrar || undefined}>{r.registrar || "—"}</span>
+                      </td>
+                      <td className="mono text-xs" style={{ color: r.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }} data-testid={`text-email-${r.domain}`}>
+                        <span className="truncate block" title={r.email || undefined}>{r.email || "—"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Empty state */}
         {results.length === 0 && !isSearching && (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Search className="h-12 w-12 text-muted-foreground/50 mb-4" />
-              <p className="text-muted-foreground text-center">
-                Enter domain names above and click "Start Search" to look up WHOIS data
-              </p>
-            </CardContent>
-          </Card>
+          <div className="fade-in fade-in-delay-2 rounded-xl p-12 text-center" style={{ border: "1px dashed var(--line)" }}>
+            <div className="logo-mark mx-auto mb-4">
+              <Search size={18} style={{ color: "var(--cyan)" }} />
+            </div>
+            <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
+              Enter .us domains above and hit <strong style={{ color: "hsl(var(--foreground))" }}>Start Search</strong>
+            </p>
+            <p className="text-xs mt-1 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
+              Queries RDAP · Who-Dat · WhoisJSON simultaneously
+            </p>
+          </div>
         )}
-      </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="max-w-5xl mx-auto px-6 pb-8 pt-4 flex items-center justify-between" style={{ borderTop: "1px solid var(--line)", marginTop: "40px" }}>
+        <span className="text-xs mono" style={{ color: "hsl(var(--muted-foreground))" }}>Domain Scout · .us WHOIS</span>
+        <span className="text-xs mono" style={{ color: "hsl(var(--muted-foreground))" }}>RDAP · Who-Dat · WhoisJSON</span>
+      </footer>
     </div>
   );
 }
