@@ -170,10 +170,26 @@ export default function Home() {
   const downloadCSV = () => {
     const rows = results.filter((r) => r.status === "found" || r.status === "not_found");
     if (rows.length === 0) return;
+
+    // Convert "example.us" → "Example.com" (capitalize first letter, swap TLD)
+    const formatDomain = (d: string) => {
+      const base = d.replace(/\.us$/i, "");
+      const capitalized = base.charAt(0).toUpperCase() + base.slice(1);
+      return `${capitalized}.com`;
+    };
+
     const csv = [
       ["Domain", "Status", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Registrant Email"].join(","),
       ...rows.map((r) =>
-        [r.domain, r.status, r.expiresOn || "", r.registrar || "", r.registrantName || "", r.registrantOrg || "", r.email || ""]
+        [
+          formatDomain(r.domain),
+          r.status,
+          r.expiresOn || "",
+          r.registrar || "",
+          r.registrantName || "",
+          r.registrantOrg || "",
+          r.email || "",
+        ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
       ),
@@ -321,7 +337,7 @@ export default function Home() {
             {(foundCount > 0 || notFoundCount > 0) && !isSearching && (
               <button
                 onClick={downloadCSV}
-                disabled={foundCount === 0}
+                disabled={foundCount === 0 && notFoundCount === 0}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.2)", color: "var(--cyan)" }}
                 data-testid="button-download"
