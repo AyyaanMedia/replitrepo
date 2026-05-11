@@ -6,6 +6,8 @@ export const whoisResultSchema = z.object({
   status: z.enum(["pending", "checking", "found", "not_found", "error"]),
   expiresOn: z.string().nullable(),
   registrar: z.string().nullable(),
+  registrantName: z.string().nullable(),
+  registrantOrg: z.string().nullable(),
   email: z.string().nullable(),
   errorMessage: z.string().nullable(),
 });

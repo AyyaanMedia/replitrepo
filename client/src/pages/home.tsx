@@ -91,6 +91,8 @@ export default function Home() {
       status: "pending",
       expiresOn: null,
       registrar: null,
+      registrantName: null,
+      registrantOrg: null,
       email: null,
       errorMessage: null,
     }));
@@ -126,7 +128,16 @@ export default function Home() {
             const data = await res.json();
             setResults((prev) =>
               prev.map((r, i2) =>
-                i2 === idx ? { ...r, status: data.status, expiresOn: data.expiresOn, registrar: data.registrar, email: data.email, errorMessage: data.errorMessage } : r
+                i2 === idx ? {
+                  ...r,
+                  status: data.status,
+                  expiresOn: data.expiresOn,
+                  registrar: data.registrar,
+                  registrantName: data.registrantName ?? null,
+                  registrantOrg: data.registrantOrg ?? null,
+                  email: data.email,
+                  errorMessage: data.errorMessage,
+                } : r
               )
             );
           } catch {
@@ -160,9 +171,9 @@ export default function Home() {
     const rows = results.filter((r) => r.status === "found" || r.status === "not_found");
     if (rows.length === 0) return;
     const csv = [
-      ["Domain", "Status", "Expires On", "Registrar", "Email"].join(","),
+      ["Domain", "Status", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Registrant Email"].join(","),
       ...rows.map((r) =>
-        [r.domain, r.status, r.expiresOn || "", r.registrar || "", r.email || ""]
+        [r.domain, r.status, r.expiresOn || "", r.registrar || "", r.registrantName || "", r.registrantOrg || "", r.email || ""]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
       ),
@@ -333,7 +344,8 @@ export default function Home() {
                     <th style={{ textAlign: "left" }}>Status</th>
                     <th style={{ textAlign: "left" }}>Expires</th>
                     <th style={{ textAlign: "left" }}>Registrar</th>
-                    <th style={{ textAlign: "left" }}>Email</th>
+                    <th style={{ textAlign: "left" }}>Registrant</th>
+                    <th style={{ textAlign: "left" }}>Registrant Email</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -347,8 +359,13 @@ export default function Home() {
                       <td className="mono text-xs" style={{ color: r.expiresOn ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }} data-testid={`text-expires-${r.domain}`}>
                         {r.expiresOn || "—"}
                       </td>
-                      <td className="text-xs" style={{ color: r.registrar ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "200px" }} data-testid={`text-registrar-${r.domain}`}>
+                      <td className="text-xs" style={{ color: r.registrar ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }} data-testid={`text-registrar-${r.domain}`}>
                         <span className="truncate block" title={r.registrar || undefined}>{r.registrar || "—"}</span>
+                      </td>
+                      <td className="text-xs" style={{ color: (r.registrantName || r.registrantOrg) ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }} data-testid={`text-registrant-${r.domain}`}>
+                        <span className="truncate block" title={r.registrantOrg || r.registrantName || undefined}>
+                          {r.registrantOrg || r.registrantName || "—"}
+                        </span>
                       </td>
                       <td className="mono text-xs" style={{ color: r.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }} data-testid={`text-email-${r.domain}`}>
                         <span className="truncate block" title={r.email || undefined}>{r.email || "—"}</span>
