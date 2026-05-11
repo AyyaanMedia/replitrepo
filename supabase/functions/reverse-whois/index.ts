@@ -9,7 +9,7 @@ const corsHeaders = {
 // Whoxy reverse WHOIS API — free, no credit card needed
 // Key stored as env secret WHOXY_API_KEY
 // Docs: https://www.whoxy.com/reverse-whois/
-const WHOXY_KEY = Deno.env.get("WHOXY_API_KEY") || "";
+const WHOXY_KEY = Deno.env.get("WHOXY_API_KEY") || "dab4acf08fce422hhqce0041174165766";
 
 // WhoisXML reverse WHOIS — paid but has free preview (10 results preview mode)
 const WHOISXML_KEY = Deno.env.get("WHOISXML_API_KEY") || "";
