@@ -173,12 +173,12 @@ export default function Home() {
     a.click();
   };
 
-  // Scroll results into view when they appear
+  const hasResults = results.length > 0;
   useEffect(() => {
-    if (results.length > 0 && tableRef.current) {
+    if (hasResults && tableRef.current) {
       tableRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [results.length > 0]);
+  }, [hasResults]);
 
   return (
     <div className="min-h-screen grid-bg" style={{ background: "var(--surface)" }}>
