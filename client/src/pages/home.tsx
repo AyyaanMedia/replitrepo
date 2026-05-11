@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Download, Search, Trash2, Globe, Zap, CircleCheck as CheckCircle2, Circle as XCircle, CircleAlert as AlertCircle, Clock, RefreshCw } from "lucide-react";
+import { Link } from "wouter";
 import { type WhoisResult } from "@shared/schema";
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || "https://zpplojmjtfrwctmcwojt.supabase.co";
@@ -66,6 +67,7 @@ export default function Home() {
   const [totalCount, setTotalCount] = useState(0);
   const tableRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<boolean>(false);
+  const sessionId = useRef<string>(crypto.randomUUID());
 
   const domains = parseDomains(domainInput);
   const domainCount = domains.length;
@@ -82,6 +84,7 @@ export default function Home() {
     if (domList.length === 0) return;
 
     abortRef.current = false;
+    sessionId.current = crypto.randomUUID();
     setIsSearching(true);
     setProcessedCount(0);
     setTotalCount(domList.length);
@@ -123,7 +126,7 @@ export default function Home() {
                 "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
                 "Apikey": SUPABASE_ANON_KEY,
               },
-              body: JSON.stringify({ domain: `${domain}.us` }),
+              body: JSON.stringify({ domain: `${domain}.us`, sessionId: sessionId.current }),
             });
             const data = await res.json();
             setResults((prev) =>
@@ -220,16 +223,20 @@ export default function Home() {
       {/* Header */}
       <header style={{ borderBottom: "1px solid var(--line)", background: "rgba(15,17,23,0.8)" }} className="sticky top-0 z-50 backdrop-blur-sm">
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="logo-mark">
-              <Globe size={16} style={{ color: "var(--cyan)" }} />
-            </div>
-            <div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <div className="logo-mark">
+                <Globe size={16} style={{ color: "var(--cyan)" }} />
+              </div>
               <span className="font-semibold text-sm tracking-tight" style={{ color: "hsl(var(--foreground))" }}>
                 Domain Scout
               </span>
-              <span className="text-xs ml-2 mono" style={{ color: "hsl(var(--muted-foreground))" }}>.us WHOIS</span>
             </div>
+            <nav className="flex items-center gap-1">
+              <span className="text-xs px-3 py-1.5 rounded-md font-medium" style={{ background: "rgba(14,165,233,0.1)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.2)" }}>Lookup</span>
+              <Link href="/history" className="nav-link text-xs px-3 py-1.5 rounded-md font-medium no-underline" style={{ color: "hsl(var(--muted-foreground))" }}>History</Link>
+              <Link href="/reverse" className="nav-link text-xs px-3 py-1.5 rounded-md font-medium no-underline" style={{ color: "hsl(var(--muted-foreground))" }}>Reverse WHOIS</Link>
+            </nav>
           </div>
           <div className="flex items-center gap-2">
             <div className="pulse-dot" />

@@ -5,11 +5,15 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
+import History from "@/pages/history";
+import ReverseWhois from "@/pages/reverse-whois";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/history" component={History} />
+      <Route path="/reverse" component={ReverseWhois} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -255,3 +255,14 @@ textarea.domain-input:disabled {
 }
 .fade-in-delay-1 { animation-delay: 0.1s; }
 .fade-in-delay-2 { animation-delay: 0.2s; }
+
+/* Nav links */
+.nav-link:hover {
+  background: rgba(14,165,233,0.06);
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Text input (single line) */
+input.domain-input {
+  height: 40px;
+}
