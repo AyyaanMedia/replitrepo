@@ -1,94 +1,75 @@
 import { useState } from "react";
-import { Search, Download, Globe, Mail } from "lucide-react";
+import { Search, Download, Globe, Mail, CircleAlert as AlertCircle, Info } from "lucide-react";
 import { Link } from "wouter";
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || "https://zpplojmjtfrwctmcwojt.supabase.co";
 const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwcGxvam1qdGZyd2N0bWN3b2p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0NzMzMDksImV4cCI6MjA5NDA0OTMwOX0.GT3ikTRnjjbwmWj0cs37pZAPpo3akqW8kdUyAAbvpTY";
 
-interface HistoryRow {
-  id: string;
-  domain: string;
-  status: string;
-  expires_on: string | null;
-  registrar: string | null;
-  registrant_name: string | null;
-  registrant_org: string | null;
-  email: string | null;
-  looked_up_at: string;
+interface Domain {
+  domainName: string;
+  date?: string;
+  registrar?: string;
 }
 
-function formatDomainCom(d: string) {
-  const base = d.replace(/\.us$/i, "");
-  return base.split("-").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("-") + ".com";
+interface ReverseWhoisResult {
+  source: "whoisxml" | "viewdns" | "none";
+  email: string;
+  count: number;
+  domains: Domain[];
+  error?: string;
 }
 
 export default function ReverseWhois() {
   const [emailInput, setEmailInput] = useState("");
-  const [results, setResults] = useState<HistoryRow[]>([]);
+  const [result, setResult] = useState<ReverseWhoisResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
-  const [searchedEmail, setSearchedEmail] = useState("");
+  const [mode, setMode] = useState<"current" | "historic">("current");
 
   const handleSearch = async () => {
     const email = emailInput.trim().toLowerCase();
     if (!email) return;
     setLoading(true);
-    setSearched(false);
+    setResult(null);
 
-    const headers = {
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-    };
-
-    // Search by exact email match — deduplicate by domain, keep latest
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/lookup_history?select=*&email=ilike.${encodeURIComponent(email)}&status=eq.found&order=looked_up_at.desc&limit=1000`,
-      { headers }
-    );
-
-    if (res.ok) {
-      const rows: HistoryRow[] = await res.json();
-      // Deduplicate: keep latest entry per domain
-      const seen = new Set<string>();
-      const deduped = rows.filter((r) => {
-        if (seen.has(r.domain)) return false;
-        seen.add(r.domain);
-        return true;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/reverse-whois`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+          "Apikey": SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ email, mode }),
       });
-      setResults(deduped);
-    } else {
-      setResults([]);
+      const data: ReverseWhoisResult = await res.json();
+      setResult(data);
+    } catch {
+      setResult({ source: "none", email, count: 0, domains: [], error: "Request failed" });
     }
 
-    setSearchedEmail(email);
-    setSearched(true);
     setLoading(false);
   };
 
   const downloadCSV = () => {
-    if (results.length === 0) return;
+    if (!result || result.domains.length === 0) return;
     const csv = [
-      ["Domain (.com)", "Domain (.us)", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Email", "Last Seen"].join(","),
-      ...results.map((r) =>
-        [
-          formatDomainCom(r.domain),
-          r.domain,
-          r.expires_on || "",
-          r.registrar || "",
-          r.registrant_name || "",
-          r.registrant_org || "",
-          r.email || "",
-          r.looked_up_at.slice(0, 10),
-        ]
+      ["Domain", "Registered Date", "Registrar"].join(","),
+      ...result.domains.map((d) =>
+        [d.domainName, d.date || "", d.registrar || ""]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
       ),
     ].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
-    a.download = `reverse-whois-${searchedEmail.replace(/@/g, "_at_")}.csv`;
+    a.download = `reverse-whois-${result.email.replace(/@/g, "_at_")}.csv`;
     a.click();
+  };
+
+  const sourceLabel: Record<string, string> = {
+    whoisxml: "WhoisXML API",
+    viewdns: "ViewDNS.info",
+    none: "No source",
   };
 
   return (
@@ -117,22 +98,22 @@ export default function ReverseWhois() {
         <div className="fade-in mb-8">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium mb-4 mono"
             style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.18)", color: "var(--cyan)" }}>
-            <Mail size={11} /> Search domains by registrant email
+            <Mail size={11} /> Find all domains registered under an email
           </div>
           <h1 className="text-2xl font-bold tracking-tight mb-1" style={{ color: "hsl(var(--foreground))" }}>
             Reverse <span style={{ color: "var(--cyan)" }}>WHOIS</span>
           </h1>
           <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
-            Find all .us domains registered under a specific email address from your lookup history
+            Discover all domain names ever registered by a specific email address — across the entire internet
           </p>
         </div>
 
-        {/* Search input */}
+        {/* Search card */}
         <div className="fade-in fade-in-delay-1 rounded-xl mb-6" style={{ background: "var(--surface-2)", border: "1px solid var(--line)" }}>
           <div className="px-5 pt-5 pb-3 border-b" style={{ borderColor: "var(--line)" }}>
-            <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Email Address</span>
+            <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Registrant Email</span>
           </div>
-          <div className="p-5">
+          <div className="p-5 space-y-4">
             <div className="flex gap-3">
               <div className="flex-1 relative">
                 <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "hsl(var(--muted-foreground))" }} />
@@ -154,43 +135,99 @@ export default function ReverseWhois() {
                 <Search size={14} /> {loading ? "Searching..." : "Search"}
               </button>
             </div>
-            <p className="text-xs mt-2 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Searches across all domains in your 7-day lookup history
-            </p>
+
+            {/* Mode toggle */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>Mode:</span>
+              <div className="flex gap-1 p-1 rounded-lg" style={{ background: "var(--surface-3)", border: "1px solid var(--line)" }}>
+                {(["current", "historic"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className="text-xs px-3 py-1 rounded-md font-medium transition-all capitalize"
+                    style={mode === m
+                      ? { background: "rgba(14,165,233,0.15)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.25)" }
+                      : { color: "hsl(var(--muted-foreground))", border: "1px solid transparent" }
+                    }
+                  >
+                    {m === "current" ? "Current Registrations" : "Historic (all-time)"}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* Loading */}
+        {loading && (
+          <div className="fade-in rounded-xl p-8 text-center" style={{ border: "1px solid var(--line)", background: "var(--surface-2)" }}>
+            <div className="inline-block w-6 h-6 border-2 rounded-full animate-spin mb-3" style={{ borderColor: "var(--line)", borderTopColor: "var(--cyan)" }} />
+            <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>Querying reverse WHOIS databases...</p>
+            <p className="text-xs mono mt-1" style={{ color: "hsl(var(--muted-foreground))" }}>This may take up to 20 seconds</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {result && result.source === "none" && (
+          <div className="fade-in rounded-xl p-5 flex items-start gap-3" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
+            <AlertCircle size={16} className="mt-0.5 shrink-0" style={{ color: "var(--red)" }} />
+            <div>
+              <p className="text-sm font-medium" style={{ color: "#f87171" }}>Lookup failed</p>
+              <p className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>{result.error || "Could not retrieve results. Please try again."}</p>
+            </div>
+          </div>
+        )}
+
         {/* Results */}
-        {searched && (
-          <div className="fade-in">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
+        {result && result.source !== "none" && (
+          <div className="fade-in space-y-4">
+            {/* Summary bar */}
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-                  Results for <span style={{ color: "var(--cyan)" }}>{searchedEmail}</span>
+                  Domains for <span style={{ color: "var(--cyan)" }}>{result.email}</span>
                 </span>
                 <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "rgba(14,165,233,0.1)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.15)" }}>
-                  {results.length} domain{results.length !== 1 ? "s" : ""}
+                  {result.count.toLocaleString()} total found
+                </span>
+                {result.domains.length !== result.count && (
+                  <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "rgba(245,158,11,0.08)", color: "var(--amber)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                    {result.domains.length.toLocaleString()} returned
+                  </span>
+                )}
+                <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "var(--surface-3)", color: "hsl(var(--muted-foreground))", border: "1px solid var(--line)" }}>
+                  via {sourceLabel[result.source]}
                 </span>
               </div>
-              {results.length > 0 && (
-                <button
-                  onClick={downloadCSV}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.2)", color: "var(--cyan)" }}
-                >
-                  <Download size={14} /> Export CSV
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {result.domains.length > 0 && (
+                  <button
+                    onClick={downloadCSV}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                    style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.2)", color: "var(--cyan)" }}
+                  >
+                    <Download size={14} /> Export CSV
+                  </button>
+                )}
+              </div>
             </div>
 
-            {results.length === 0 ? (
+            {/* Info note if count > returned */}
+            {result.count > result.domains.length && (
+              <div className="flex items-start gap-2 px-4 py-3 rounded-lg" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)" }}>
+                <Info size={13} className="mt-0.5 shrink-0" style={{ color: "var(--amber)" }} />
+                <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
+                  <span style={{ color: "var(--amber)" }}>{result.count.toLocaleString()} domains</span> are registered under this email.
+                  {result.domains.length < result.count && ` Showing the first ${result.domains.length.toLocaleString()} results. To get all results, a paid WhoisXML API plan is required.`}
+                </p>
+              </div>
+            )}
+
+            {result.domains.length === 0 ? (
               <div className="rounded-xl p-12 text-center" style={{ border: "1px dashed var(--line)" }}>
                 <Mail size={24} className="mx-auto mb-3" style={{ color: "hsl(var(--muted-foreground))" }} />
                 <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  No domains found for <strong style={{ color: "hsl(var(--foreground))" }}>{searchedEmail}</strong> in the last 7 days.
-                </p>
-                <p className="text-xs mt-1 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  Only domains from your scan history are searchable here.
+                  No domains found for <strong style={{ color: "hsl(var(--foreground))" }}>{result.email}</strong>
                 </p>
               </div>
             ) : (
@@ -200,31 +237,21 @@ export default function ReverseWhois() {
                     <thead>
                       <tr>
                         <th style={{ textAlign: "left" }}>#</th>
-                        <th style={{ textAlign: "left" }}>Domain (.us)</th>
-                        <th style={{ textAlign: "left" }}>Expires</th>
+                        <th style={{ textAlign: "left" }}>Domain</th>
+                        <th style={{ textAlign: "left" }}>Registered</th>
                         <th style={{ textAlign: "left" }}>Registrar</th>
-                        <th style={{ textAlign: "left" }}>Registrant</th>
-                        <th style={{ textAlign: "left" }}>Last Seen</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {results.map((r, idx) => (
-                        <tr key={r.id} className="row-animate" style={{ animationDelay: `${Math.min(idx * 20, 150)}ms` }}>
+                      {result.domains.map((d, idx) => (
+                        <tr key={d.domainName + idx} className="row-animate" style={{ animationDelay: `${Math.min(idx * 15, 200)}ms` }}>
                           <td className="mono text-xs" style={{ color: "hsl(var(--muted-foreground))", width: "40px" }}>{idx + 1}</td>
-                          <td className="mono text-xs font-medium" style={{ color: "hsl(var(--foreground))" }}>{r.domain}</td>
-                          <td className="mono text-xs" style={{ color: r.expires_on ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
-                            {r.expires_on || "—"}
+                          <td className="mono text-xs font-medium" style={{ color: "hsl(var(--foreground))" }}>{d.domainName}</td>
+                          <td className="mono text-xs" style={{ color: d.date ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
+                            {d.date || "—"}
                           </td>
-                          <td className="text-xs" style={{ color: "hsl(var(--muted-foreground))", maxWidth: "160px" }}>
-                            <span className="truncate block" title={r.registrar || undefined}>{r.registrar || "—"}</span>
-                          </td>
-                          <td className="text-xs" style={{ color: "hsl(var(--muted-foreground))", maxWidth: "160px" }}>
-                            <span className="truncate block" title={r.registrant_org || r.registrant_name || undefined}>
-                              {r.registrant_org || r.registrant_name || "—"}
-                            </span>
-                          </td>
-                          <td className="mono text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                            {r.looked_up_at.slice(0, 10)}
+                          <td className="text-xs" style={{ color: "hsl(var(--muted-foreground))", maxWidth: "200px" }}>
+                            <span className="truncate block" title={d.registrar}>{d.registrar || "—"}</span>
                           </td>
                         </tr>
                       ))}
@@ -236,16 +263,17 @@ export default function ReverseWhois() {
           </div>
         )}
 
-        {!searched && !loading && (
+        {/* Empty state */}
+        {!result && !loading && (
           <div className="fade-in fade-in-delay-2 rounded-xl p-12 text-center" style={{ border: "1px dashed var(--line)" }}>
             <div className="logo-mark mx-auto mb-4">
               <Mail size={18} style={{ color: "var(--cyan)" }} />
             </div>
             <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Enter a registrant email above to find all domains registered under it
+              Enter a registrant email to find all domains registered under it
             </p>
             <p className="text-xs mt-1 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Searches your 7-day scan history
+              Searches ViewDNS.info · WhoisXML across the entire domain registry
             </p>
           </div>
         )}
