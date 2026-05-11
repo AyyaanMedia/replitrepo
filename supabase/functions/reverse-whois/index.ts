@@ -6,121 +6,160 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-// Whoxy reverse WHOIS API — free, no credit card needed
-// Key stored as env secret WHOXY_API_KEY
-// Docs: https://www.whoxy.com/reverse-whois/
-const WHOXY_KEY = Deno.env.get("WHOXY_API_KEY") || "dab4acf08fce422hhqce0041174165766";
-
-// WhoisXML reverse WHOIS — paid but has free preview (10 results preview mode)
-const WHOISXML_KEY = Deno.env.get("WHOISXML_API_KEY") || "";
-
 interface Domain {
   domainName: string;
   date?: string;
   registrar?: string;
 }
 
-interface ReverseWhoisResult {
-  source: "whoxy" | "whoisxml" | "none";
+interface Result {
+  source: string;
   email: string;
   count: number;
   domains: Domain[];
   error?: string;
 }
 
-async function fromWhoxy(email: string, page = 1): Promise<ReverseWhoisResult> {
-  if (!WHOXY_KEY) throw new Error("WHOXY_API_KEY not configured");
+const UAS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+];
+const ua = () => UAS[Math.floor(Math.random() * UAS.length)];
 
-  // "micro" mode returns up to 2500 results per page
-  const url = `https://api.whoxy.com/?key=${WHOXY_KEY}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro&page=${page}`;
+// ─── ViewDNS.info HTML scrape (unlimited, free) ───────────────────────────────
+async function fromViewDNS(email: string): Promise<Result> {
+  const url = `https://viewdns.info/reversewhois/?q=${encodeURIComponent(email)}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": ua(),
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": "https://viewdns.info/",
+      "Connection": "keep-alive",
+      "Upgrade-Insecure-Requests": "1",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(25000),
+  });
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!res.ok) throw new Error(`Whoxy HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`ViewDNS HTTP ${res.status}`);
+  const html = await res.text();
 
-  const data = await res.json();
-
-  if (data.status_code !== 1) {
-    throw new Error(data.status_reason || `Whoxy error code ${data.status_code}`);
+  if (/captcha|cf-browser|just a moment|cloudflare/i.test(html)) {
+    throw new Error("ViewDNS bot protection");
   }
 
-  const totalPages: number = data.total_pages ?? 1;
-  const totalResults: number = data.total_results ?? 0;
+  const domains: Domain[] = [];
 
-  const domains: Domain[] = (data.search_result || []).map((r: any) => ({
-    domainName: r.domain_name || "",
-    date: r.create_date || r.update_date || undefined,
-    registrar: r.domain_registrar?.registrar_name || undefined,
-  })).filter((d: Domain) => d.domainName);
-
-  // If there are more pages, fetch them all (up to page 10 = 25,000 results max)
-  const allDomains = [...domains];
-  const maxPages = Math.min(totalPages, 10);
-
-  if (page === 1 && totalPages > 1) {
-    const pagePromises: Promise<void>[] = [];
-    for (let p = 2; p <= maxPages; p++) {
-      const pg = p;
-      pagePromises.push(
-        (async () => {
-          try {
-            const pUrl = `https://api.whoxy.com/?key=${WHOXY_KEY}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro&page=${pg}`;
-            const pRes = await fetch(pUrl, { signal: AbortSignal.timeout(20000) });
-            if (!pRes.ok) return;
-            const pData = await pRes.json();
-            if (pData.status_code === 1) {
-              const pDomains: Domain[] = (pData.search_result || []).map((r: any) => ({
-                domainName: r.domain_name || "",
-                date: r.create_date || r.update_date || undefined,
-                registrar: r.domain_registrar?.registrar_name || undefined,
-              })).filter((d: Domain) => d.domainName);
-              allDomains.push(...pDomains);
-            }
-          } catch { /* skip failed page */ }
-        })()
-      );
+  // Find table rows: <td>domain.tld</td><td>date</td>
+  const rowRe = /<tr[^>]*>\s*<td[^>]*>([a-zA-Z0-9][\w.-]{1,62}\.[a-zA-Z]{2,})<\/td>\s*<td[^>]*>([^<]*)<\/td>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = rowRe.exec(html)) !== null) {
+    const d = m[1].trim();
+    if (!domains.find(x => x.domainName === d)) {
+      domains.push({ domainName: d, date: m[2].trim() || undefined });
     }
-    await Promise.all(pagePromises);
   }
 
-  return {
-    source: "whoxy",
-    email,
-    count: totalResults,
-    domains: allDomains,
-  };
+  // Broader fallback — any cell with a domain-like value
+  if (domains.length === 0) {
+    const cellRe = /<td[^>]*>\s*([a-zA-Z0-9][\w-]{1,62}\.[a-zA-Z]{2,})\s*<\/td>/gi;
+    while ((m = cellRe.exec(html)) !== null) {
+      const d = m[1].trim();
+      if (!domains.find(x => x.domainName === d)) domains.push({ domainName: d });
+    }
+  }
+
+  if (domains.length === 0) {
+    if (/no results|0 results|not found|no domains/i.test(html)) {
+      return { source: "viewdns", email, count: 0, domains: [] };
+    }
+    throw new Error("ViewDNS: unable to parse results — site may have changed");
+  }
+
+  return { source: "viewdns", email, count: domains.length, domains };
 }
 
-async function fromWhoisXML(email: string): Promise<ReverseWhoisResult> {
-  if (!WHOISXML_KEY) throw new Error("WHOISXML_API_KEY not configured");
+// ─── HackerTarget reverse WHOIS (free tier: 100/day, no signup) ──────────────
+async function fromHackerTarget(email: string): Promise<Result> {
+  const url = `https://api.hackertarget.com/reversewhois/?q=${encodeURIComponent(email)}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": ua(), "Accept": "text/plain" },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`HackerTarget HTTP ${res.status}`);
+  const text = await res.text();
 
-  // preview mode — free, shows up to 10 results but gives accurate count
-  const body = {
-    apiKey: WHOISXML_KEY,
-    searchType: "current",
-    mode: "preview",
-    basicSearchTerms: { include: [email] },
-  };
+  if (/error|exceeded|limit|upgrade|no results/i.test(text.slice(0, 120))) {
+    throw new Error(`HackerTarget: ${text.slice(0, 120).trim()}`);
+  }
 
+  const lines = text.split("\n")
+    .map(l => l.trim())
+    .filter(l => l && /^[a-zA-Z0-9][\w.-]{1,62}\.[a-zA-Z]{2,}$/.test(l));
+
+  if (lines.length === 0) throw new Error("HackerTarget: no results");
+
+  return { source: "hackertarget", email, count: lines.length, domains: lines.map(d => ({ domainName: d })) };
+}
+
+// ─── Whoxy API (key in env, free trial credits available) ────────────────────
+async function fromWhoxy(email: string): Promise<Result> {
+  const key = Deno.env.get("WHOXY_API_KEY") || "dab4acf08fce422hhqce0041174165766";
+  const base = `https://api.whoxy.com/?key=${key}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro`;
+
+  const res = await fetch(base, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new Error(`Whoxy HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.status_code !== 1) throw new Error(data.status_reason || `Whoxy error ${data.status_code}`);
+
+  const parse = (arr: any[]): Domain[] =>
+    arr.map((r: any) => ({
+      domainName: r.domain_name || "",
+      date: r.create_date || r.update_date || undefined,
+      registrar: r.domain_registrar?.registrar_name || undefined,
+    })).filter((d: Domain) => d.domainName);
+
+  const domains = parse(data.search_result || []);
+  const totalPages = Math.min(data.total_pages ?? 1, 10);
+
+  if (totalPages > 1) {
+    const extra = await Promise.allSettled(
+      Array.from({ length: totalPages - 1 }, (_, i) =>
+        fetch(`${base}&page=${i + 2}`, { signal: AbortSignal.timeout(20000) })
+          .then(r => r.json())
+          .then(d => parse(d.search_result || []))
+      )
+    );
+    for (const r of extra) if (r.status === "fulfilled") domains.push(...r.value);
+  }
+
+  return { source: "whoxy", email, count: data.total_results ?? domains.length, domains };
+}
+
+// ─── WhoisXML preview (free credits on new account) ──────────────────────────
+async function fromWhoisXML(email: string): Promise<Result> {
+  const key = Deno.env.get("WHOISXML_API_KEY") || "";
+  if (!key) throw new Error("No WhoisXML key");
   const res = await fetch("https://reverse-whois-api.whoisxmlapi.com/api/v2", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ apiKey: key, searchType: "current", mode: "preview", basicSearchTerms: { include: [email] } }),
     signal: AbortSignal.timeout(15000),
   });
-
   if (!res.ok) throw new Error(`WhoisXML HTTP ${res.status}`);
   const data = await res.json();
-
-  const domains: Domain[] = (data.domainsList || []).map((d: string) => ({ domainName: d }));
-
+  if (data.code && data.code !== 200) throw new Error(data.messages || `WhoisXML error ${data.code}`);
   return {
     source: "whoisxml",
     email,
-    count: data.domainsCount ?? domains.length,
-    domains,
+    count: data.domainsCount ?? 0,
+    domains: (data.domainsList || []).map((d: string) => ({ domainName: d })),
   };
 }
 
+// ─── Handler ──────────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -133,58 +172,43 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { email } = await req.json();
+    const body = await req.json();
+    const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
 
-    if (!email || typeof email !== "string" || !email.includes("@")) {
+    if (!email || !email.includes("@")) {
       return new Response(JSON.stringify({ error: "Invalid email address" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const clean = email.trim().toLowerCase();
-    let result: ReverseWhoisResult;
+    const errors: string[] = [];
+    const sources: [string, () => Promise<Result>][] = [
+      ["ViewDNS", () => fromViewDNS(email)],
+      ["HackerTarget", () => fromHackerTarget(email)],
+      ["Whoxy", () => fromWhoxy(email)],
+      ["WhoisXML", () => fromWhoisXML(email)],
+    ];
 
-    if (WHOXY_KEY) {
+    for (const [name, fn] of sources) {
       try {
-        result = await fromWhoxy(clean);
+        const result = await fn();
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       } catch (err) {
-        // fall back to WhoisXML preview if available
-        if (WHOISXML_KEY) {
-          try {
-            result = await fromWhoisXML(clean);
-          } catch (err2) {
-            result = { source: "none", email: clean, count: 0, domains: [], error: String(err2) };
-          }
-        } else {
-          result = { source: "none", email: clean, count: 0, domains: [], error: String(err) };
-        }
+        errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } else if (WHOISXML_KEY) {
-      try {
-        result = await fromWhoisXML(clean);
-      } catch (err) {
-        result = { source: "none", email: clean, count: 0, domains: [], error: String(err) };
-      }
-    } else {
-      result = {
-        source: "none",
-        email: clean,
-        count: 0,
-        domains: [],
-        error: "No API key configured. Add WHOXY_API_KEY (free at whoxy.com) to enable reverse WHOIS lookups.",
-      };
     }
 
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify({
+      source: "none", email, count: 0, domains: [],
+      error: errors.join(" | "),
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
   } catch (err) {
-    return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : "Unknown error",
-        source: "none", email: "", count: 0, domains: [],
-      }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({
+      error: err instanceof Error ? err.message : "Unknown error",
+      source: "none", email: "", count: 0, domains: [],
+    }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
