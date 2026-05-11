@@ -6,9 +6,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-// WhoisXML Reverse WHOIS API — free tier: 500 lookups/month, no credit card needed
-// Key is stored as env secret WHOISXML_API_KEY
-// Docs: https://reverse-whois-api.whoisxmlapi.com/api/v2
+// Whoxy reverse WHOIS API — free, no credit card needed
+// Key stored as env secret WHOXY_API_KEY
+// Docs: https://www.whoxy.com/reverse-whois/
+const WHOXY_KEY = Deno.env.get("WHOXY_API_KEY") || "";
+
+// WhoisXML reverse WHOIS — paid but has free preview (10 results preview mode)
 const WHOISXML_KEY = Deno.env.get("WHOISXML_API_KEY") || "";
 
 interface Domain {
@@ -18,20 +21,83 @@ interface Domain {
 }
 
 interface ReverseWhoisResult {
-  source: "whoisxml" | "viewdns" | "none";
+  source: "whoxy" | "whoisxml" | "none";
   email: string;
   count: number;
   domains: Domain[];
   error?: string;
 }
 
-async function fromWhoisXML(email: string, mode: "current" | "historic" = "current"): Promise<ReverseWhoisResult> {
-  if (!WHOISXML_KEY) throw new Error("No WhoisXML API key configured");
+async function fromWhoxy(email: string, page = 1): Promise<ReverseWhoisResult> {
+  if (!WHOXY_KEY) throw new Error("WHOXY_API_KEY not configured");
 
+  // "micro" mode returns up to 2500 results per page
+  const url = `https://api.whoxy.com/?key=${WHOXY_KEY}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro&page=${page}`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new Error(`Whoxy HTTP ${res.status}`);
+
+  const data = await res.json();
+
+  if (data.status_code !== 1) {
+    throw new Error(data.status_reason || `Whoxy error code ${data.status_code}`);
+  }
+
+  const totalPages: number = data.total_pages ?? 1;
+  const totalResults: number = data.total_results ?? 0;
+
+  const domains: Domain[] = (data.search_result || []).map((r: any) => ({
+    domainName: r.domain_name || "",
+    date: r.create_date || r.update_date || undefined,
+    registrar: r.domain_registrar?.registrar_name || undefined,
+  })).filter((d: Domain) => d.domainName);
+
+  // If there are more pages, fetch them all (up to page 10 = 25,000 results max)
+  const allDomains = [...domains];
+  const maxPages = Math.min(totalPages, 10);
+
+  if (page === 1 && totalPages > 1) {
+    const pagePromises: Promise<void>[] = [];
+    for (let p = 2; p <= maxPages; p++) {
+      const pg = p;
+      pagePromises.push(
+        (async () => {
+          try {
+            const pUrl = `https://api.whoxy.com/?key=${WHOXY_KEY}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro&page=${pg}`;
+            const pRes = await fetch(pUrl, { signal: AbortSignal.timeout(20000) });
+            if (!pRes.ok) return;
+            const pData = await pRes.json();
+            if (pData.status_code === 1) {
+              const pDomains: Domain[] = (pData.search_result || []).map((r: any) => ({
+                domainName: r.domain_name || "",
+                date: r.create_date || r.update_date || undefined,
+                registrar: r.domain_registrar?.registrar_name || undefined,
+              })).filter((d: Domain) => d.domainName);
+              allDomains.push(...pDomains);
+            }
+          } catch { /* skip failed page */ }
+        })()
+      );
+    }
+    await Promise.all(pagePromises);
+  }
+
+  return {
+    source: "whoxy",
+    email,
+    count: totalResults,
+    domains: allDomains,
+  };
+}
+
+async function fromWhoisXML(email: string): Promise<ReverseWhoisResult> {
+  if (!WHOISXML_KEY) throw new Error("WHOISXML_API_KEY not configured");
+
+  // preview mode — free, shows up to 10 results but gives accurate count
   const body = {
     apiKey: WHOISXML_KEY,
-    searchType: mode,
-    mode: "purchase",
+    searchType: "current",
+    mode: "preview",
     basicSearchTerms: { include: [email] },
   };
 
@@ -39,20 +105,13 @@ async function fromWhoisXML(email: string, mode: "current" | "historic" = "curre
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(15000),
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`WhoisXML error ${res.status}: ${text.slice(0, 200)}`);
-  }
-
+  if (!res.ok) throw new Error(`WhoisXML HTTP ${res.status}`);
   const data = await res.json();
 
-  // Paginated: first call returns preview; purchase mode returns all
-  const domains: Domain[] = (data.domainsList || []).map((d: string | { domainName?: string; name?: string }) =>
-    typeof d === "string" ? { domainName: d } : { domainName: d.domainName || d.name || String(d) }
-  );
+  const domains: Domain[] = (data.domainsList || []).map((d: string) => ({ domainName: d }));
 
   return {
     source: "whoisxml",
@@ -60,80 +119,6 @@ async function fromWhoisXML(email: string, mode: "current" | "historic" = "curre
     count: data.domainsCount ?? domains.length,
     domains,
   };
-}
-
-async function fromViewDNS(email: string): Promise<ReverseWhoisResult> {
-  // ViewDNS.info reverse WHOIS — free, no key, returns up to 500 results
-  const url = `https://viewdns.info/reversewhois/?q=${encodeURIComponent(email)}&output=json`;
-
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; DomainScout/1.0)",
-      "Accept": "application/json, text/html",
-    },
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!res.ok) throw new Error(`ViewDNS error ${res.status}`);
-
-  const contentType = res.headers.get("content-type") || "";
-
-  if (contentType.includes("json")) {
-    const data = await res.json();
-    const domains: Domain[] = (data.response?.domains || []).map((d: any) => ({
-      domainName: d.name || d.domain || String(d),
-      date: d.created_date || d.date || undefined,
-      registrar: d.registrar || undefined,
-    }));
-    return {
-      source: "viewdns",
-      email,
-      count: data.response?.count ?? domains.length,
-      domains,
-    };
-  }
-
-  // HTML fallback — parse table
-  const html = await res.text();
-  const domains: Domain[] = [];
-
-  // Match rows in the results table
-  const rowRegex = /<tr[^>]*>\s*<td[^>]*>([a-z0-9][a-z0-9\-\.]+\.[a-z]{2,})<\/td>\s*<td[^>]*>([^<]*)<\/td>\s*<td[^>]*>([^<]*)<\/td>/gi;
-  let match;
-  while ((match = rowRegex.exec(html)) !== null) {
-    const domainName = match[1].trim();
-    if (domainName && domainName !== "Domain Name") {
-      domains.push({
-        domainName,
-        date: match[2]?.trim() || undefined,
-        registrar: match[3]?.trim() || undefined,
-      });
-    }
-  }
-
-  // Also try simpler pattern
-  if (domains.length === 0) {
-    const simpleRegex = /([a-z0-9][a-z0-9\-]+\.[a-z]{2,})/g;
-    const tableMatch = html.match(/Results for.*?<\/table>/is);
-    if (tableMatch) {
-      const tableHtml = tableMatch[0];
-      let m;
-      const seen = new Set<string>();
-      while ((m = simpleRegex.exec(tableHtml)) !== null) {
-        const d = m[1];
-        if (!seen.has(d) && !d.includes("viewdns") && !d.includes("cloudflare")) {
-          seen.add(d);
-          domains.push({ domainName: d });
-        }
-      }
-    }
-  }
-
-  // Get count from page
-  const countMatch = html.match(/(\d[\d,]+)\s+(?:domain|result)/i);
-  const count = countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : domains.length;
-
-  return { source: "viewdns", email, count, domains };
 }
 
 Deno.serve(async (req: Request) => {
@@ -148,7 +133,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { email, mode = "current" } = await req.json();
+    const { email } = await req.json();
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
       return new Response(JSON.stringify({ error: "Invalid email address" }), {
@@ -157,27 +142,37 @@ Deno.serve(async (req: Request) => {
     }
 
     const clean = email.trim().toLowerCase();
-
-    // Try WhoisXML first (most accurate), fall back to ViewDNS
     let result: ReverseWhoisResult;
 
-    if (WHOISXML_KEY) {
+    if (WHOXY_KEY) {
       try {
-        result = await fromWhoisXML(clean, mode as "current" | "historic");
+        result = await fromWhoxy(clean);
       } catch (err) {
-        console.error("WhoisXML failed, trying ViewDNS:", err);
-        try {
-          result = await fromViewDNS(clean);
-        } catch (err2) {
-          result = { source: "none", email: clean, count: 0, domains: [], error: String(err2) };
+        // fall back to WhoisXML preview if available
+        if (WHOISXML_KEY) {
+          try {
+            result = await fromWhoisXML(clean);
+          } catch (err2) {
+            result = { source: "none", email: clean, count: 0, domains: [], error: String(err2) };
+          }
+        } else {
+          result = { source: "none", email: clean, count: 0, domains: [], error: String(err) };
         }
       }
-    } else {
+    } else if (WHOISXML_KEY) {
       try {
-        result = await fromViewDNS(clean);
+        result = await fromWhoisXML(clean);
       } catch (err) {
         result = { source: "none", email: clean, count: 0, domains: [], error: String(err) };
       }
+    } else {
+      result = {
+        source: "none",
+        email: clean,
+        count: 0,
+        domains: [],
+        error: "No API key configured. Add WHOXY_API_KEY (free at whoxy.com) to enable reverse WHOIS lookups.",
+      };
     }
 
     return new Response(JSON.stringify(result), {
@@ -185,7 +180,10 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error", source: "none", email: "", count: 0, domains: [] }),
+      JSON.stringify({
+        error: err instanceof Error ? err.message : "Unknown error",
+        source: "none", email: "", count: 0, domains: [],
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
