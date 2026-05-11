@@ -171,11 +171,16 @@ export default function Home() {
     const rows = results.filter((r) => r.status === "found" || r.status === "not_found");
     if (rows.length === 0) return;
 
-    // Convert "example.us" → "Example.com" (capitalize first letter, swap TLD)
+    // "make-india.us" → "Make-India.com"
+    // "dad-mother-Sister.us" → "Dad-Mother-Sister.com"
+    // "makeIndia.us" → "MakeIndia.com" (camelCase preserved + first char upcased)
     const formatDomain = (d: string) => {
       const base = d.replace(/\.us$/i, "");
-      const capitalized = base.charAt(0).toUpperCase() + base.slice(1);
-      return `${capitalized}.com`;
+      const titleCased = base
+        .split("-")
+        .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+        .join("-");
+      return `${titleCased}.com`;
     };
 
     const csv = [
