@@ -11,7 +11,7 @@ import {
   TableHeader, 
   TableRow 
 } from "@/components/ui/table";
-import { Download, Search, Trash2, Loader2 } from "lucide-react";
+import { Download, Search, Trash2, Loader as Loader2 } from "lucide-react";
 import { type WhoisResult } from "@shared/schema";
 
 export default function Home() {
