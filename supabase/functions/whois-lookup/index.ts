@@ -18,6 +18,7 @@ interface WhoisResult {
   registrantName: string | null;
   registrantOrg: string | null;
   email: string | null;
+  country: string | null;
   keyIndexUsed?: number;
 }
 
@@ -28,6 +29,7 @@ const EMPTY: WhoisResult = {
   registrantName: null,
   registrantOrg: null,
   email: null,
+  country: null,
 };
 
 function formatDate(dateStr: string | null | undefined): string | null {
@@ -75,6 +77,7 @@ async function fromApiLayer(domain: string): Promise<WhoisResult> {
         registrantName: d.registrant_name || d.registrant_organization || null,
         registrantOrg: d.registrant_organization || null,
         email,
+        country: d.registrant_country || d.admin_country || null,
         keyIndexUsed: ki,
       };
     } catch { continue; }
@@ -131,7 +134,7 @@ async function fromRdap(domain: string): Promise<WhoisResult> {
       }
 
       if (expiresOn || registrar) {
-        return { found: true, expiresOn, registrar, registrantName: null, registrantOrg: null, email };
+        return { found: true, expiresOn, registrar, registrantName: null, registrantOrg: null, email, country: null };
       }
     } catch { continue; }
   }
@@ -147,6 +150,7 @@ function merge(a: WhoisResult, b: WhoisResult): WhoisResult {
     registrantName: a.registrantName || b.registrantName,
     registrantOrg: a.registrantOrg || b.registrantOrg,
     email: isValidEmail(a.email) ? a.email : isValidEmail(b.email) ? b.email : null,
+    country: a.country || b.country,
     keyIndexUsed: a.keyIndexUsed,
   };
 }
@@ -222,7 +226,7 @@ Deno.serve(async (req: Request) => {
 
     if (!domain || typeof domain !== "string") {
       return new Response(
-        JSON.stringify({ domain: "", status: "error", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, errorMessage: "Invalid domain" }),
+        JSON.stringify({ domain: "", status: "error", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, country: null, errorMessage: "Invalid domain" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -243,15 +247,15 @@ Deno.serve(async (req: Request) => {
     EdgeRuntime.waitUntil(saveHistory(supabase, clean, status, final, sessionId, final.keyIndexUsed));
 
     const responseBody = final.found
-      ? { domain: clean, status: "found", expiresOn: final.expiresOn, registrar: final.registrar, registrantName: final.registrantName, registrantOrg: final.registrantOrg, email: final.email, errorMessage: null }
-      : { domain: clean, status: "not_found", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, errorMessage: null };
+      ? { domain: clean, status: "found", expiresOn: final.expiresOn, registrar: final.registrar, registrantName: final.registrantName, registrantOrg: final.registrantOrg, email: final.email, country: final.country, errorMessage: null }
+      : { domain: clean, status: "not_found", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, country: null, errorMessage: null };
 
     return new Response(JSON.stringify(responseBody), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ domain: "", status: "error", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, errorMessage: err instanceof Error ? err.message : "Unknown error" }),
+      JSON.stringify({ domain: "", status: "error", expiresOn: null, registrar: null, registrantName: null, registrantOrg: null, email: null, country: null, errorMessage: err instanceof Error ? err.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

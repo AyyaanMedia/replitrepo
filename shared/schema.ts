@@ -9,6 +9,7 @@ export const whoisResultSchema = z.object({
   registrantName: z.string().nullable(),
   registrantOrg: z.string().nullable(),
   email: z.string().nullable(),
+  country: z.string().nullable(),
   errorMessage: z.string().nullable(),
 });
 

@@ -97,6 +97,7 @@ export default function Home() {
       registrantName: null,
       registrantOrg: null,
       email: null,
+      country: null,
       errorMessage: null,
     }));
     setResults(initialResults);
@@ -139,6 +140,7 @@ export default function Home() {
                   registrantName: data.registrantName ?? null,
                   registrantOrg: data.registrantOrg ?? null,
                   email: data.email,
+                  country: data.country ?? null,
                   errorMessage: data.errorMessage,
                 } : r
               )
@@ -187,16 +189,16 @@ export default function Home() {
     };
 
     const csv = [
-      ["Domain", "Status", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Registrant Email"].join(","),
+      ["Domain", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Registrant Email", "Country"].join(","),
       ...rows.map((r) =>
         [
           formatDomain(r.domain),
-          r.status,
           r.expiresOn || "",
           r.registrar || "",
           r.registrantName || "",
           r.registrantOrg || "",
           r.email || "",
+          r.country || "",
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
@@ -374,6 +376,7 @@ export default function Home() {
                     <th style={{ textAlign: "left" }}>Registrar</th>
                     <th style={{ textAlign: "left" }}>Registrant</th>
                     <th style={{ textAlign: "left" }}>Registrant Email</th>
+                    <th style={{ textAlign: "left" }}>Country</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -397,6 +400,9 @@ export default function Home() {
                       </td>
                       <td className="mono text-xs" style={{ color: r.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }} data-testid={`text-email-${r.domain}`}>
                         <span className="truncate block" title={r.email || undefined}>{r.email || "—"}</span>
+                      </td>
+                      <td className="text-xs" style={{ color: r.country ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
+                        {r.country || "—"}
                       </td>
                     </tr>
                   ))}
