@@ -1,19 +1,19 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Download, Search, Trash2, Globe, Zap, CircleCheck as CheckCircle2, Circle as XCircle, CircleAlert as AlertCircle, Clock, RefreshCw, ShieldCheck, WifiOff } from "lucide-react";
+import { Download, Search, Trash2, Globe, Zap, CircleCheck as CheckCircle2, Circle as XCircle, CircleAlert as AlertCircle, Clock, RefreshCw, ShieldCheck } from "lucide-react";
 import { Link } from "wouter";
 import { type WhoisResult } from "@shared/schema";
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || "https://zpplojmjtfrwctmcwojt.supabase.co";
 const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwcGxvam1qdGZyd2N0bWN3b2p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0NzMzMDksImV4cCI6MjA5NDA0OTMwOX0.GT3ikTRnjjbwmWj0cs37pZAPpo3akqW8kdUyAAbvpTY";
 
-const AVAILABILITY_TLDS = [".com", ".net", ".org", ".io"];
+type ComStatus = "pending" | "checking" | "available" | "taken" | "error";
 
-type AvailStatus = "checking" | "available" | "taken" | "error";
-
-interface DomainAvailability {
-  domain: string; // e.g. "example"
-  email: string | null; // from whois result
-  tlds: Record<string, AvailStatus>; // e.g. { ".com": "available" }
+interface AvailRow {
+  domain: string;       // bare name e.g. "example"
+  usDomain: string;     // "example.us"
+  usStatus: WhoisResult["status"];
+  email: string | null; // from .us whois
+  comStatus: ComStatus;
 }
 
 function parseDomains(input: string): string[] {
@@ -23,27 +23,6 @@ function parseDomains(input: string): string[] {
     .filter((d) => d.length > 0)
     .map((d) => (d.endsWith(".us") ? d.slice(0, -3) : d))
     .filter((d, i, arr) => arr.indexOf(d) === i);
-}
-
-async function checkTldAvailability(name: string, tld: string): Promise<AvailStatus> {
-  const fullDomain = `${name}${tld}`;
-  const tldNoDot = tld.slice(1); // "com", "net", etc.
-  const rdapBase: Record<string, string> = {
-    com: "https://rdap.verisign.com/com/v1/domain/",
-    net: "https://rdap.verisign.com/net/v1/domain/",
-    org: "https://rdap.publicinterestregistry.org/rdap/domain/",
-    io: "https://rdap.iana.org/domain/",
-  };
-  const base = rdapBase[tldNoDot];
-  if (!base) return "error";
-  try {
-    const res = await fetch(`${base}${fullDomain}`, { signal: AbortSignal.timeout(6000) });
-    if (res.status === 404) return "available";
-    if (res.ok) return "taken";
-    return "error";
-  } catch {
-    return "error";
-  }
 }
 
 function StatusBadge({ status }: { status: WhoisResult["status"] }) {
@@ -81,33 +60,34 @@ function StatusBadge({ status }: { status: WhoisResult["status"] }) {
   }
 }
 
-function AvailBadge({ status }: { status: AvailStatus }) {
-  if (status === "checking") {
+function ComBadge({ status }: { status: ComStatus }) {
+  if (status === "checking" || status === "pending") {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium mono"
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium"
         style={{ background: "rgba(14,165,233,0.08)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.15)" }}>
-        <RefreshCw size={9} className="animate-spin" /> …
+        <RefreshCw size={10} className={status === "checking" ? "animate-spin" : ""} />
+        {status === "checking" ? "Checking" : "Pending"}
       </span>
     );
   }
   if (status === "available") {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold mono"
-        style={{ background: "rgba(34,197,94,0.1)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.2)" }}>
-        <CheckCircle2 size={9} /> Free
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold"
+        style={{ background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.25)" }}>
+        <CheckCircle2 size={10} /> Available
       </span>
     );
   }
   if (status === "taken") {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium mono"
-        style={{ background: "rgba(148,163,184,0.06)", color: "#64748b", border: "1px solid rgba(148,163,184,0.12)" }}>
-        <WifiOff size={9} /> Taken
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium"
+        style={{ background: "rgba(148,163,184,0.06)", color: "#64748b", border: "1px solid rgba(100,116,139,0.15)" }}>
+        <XCircle size={10} /> Taken
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium mono"
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium"
       style={{ background: "rgba(239,68,68,0.06)", color: "#f87171", border: "1px solid rgba(239,68,68,0.12)" }}>
       —
     </span>
@@ -130,10 +110,9 @@ export default function Home() {
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Availability state
-  const [availability, setAvailability] = useState<DomainAvailability[]>([]);
+  const [availRows, setAvailRows] = useState<AvailRow[]>([]);
   const [isCheckingAvail, setIsCheckingAvail] = useState(false);
-  const [availChecked, setAvailChecked] = useState(false);
+  const [availDone, setAvailDone] = useState(false);
 
   const tableRef = useRef<HTMLDivElement>(null);
   const availRef = useRef<HTMLDivElement>(null);
@@ -147,8 +126,9 @@ export default function Home() {
   const foundCount = results.filter((r) => r.status === "found").length;
   const notFoundCount = results.filter((r) => r.status === "not_found").length;
   const errorCount = results.filter((r) => r.status === "error").length;
-
   const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+  const availableComCount = availRows.filter((r) => r.comStatus === "available").length;
 
   const handleSearch = useCallback(async () => {
     const domList = parseDomains(domainInput);
@@ -159,8 +139,8 @@ export default function Home() {
     setIsSearching(true);
     setProcessedCount(0);
     setTotalCount(domList.length);
-    setAvailability([]);
-    setAvailChecked(false);
+    setAvailRows([]);
+    setAvailDone(false);
 
     const initialResults: WhoisResult[] = domList.map((d) => ({
       domain: `${d}.us`,
@@ -214,15 +194,11 @@ export default function Home() {
               errorMessage: data.errorMessage,
             };
             finalResults[idx] = updated;
-            setResults((prev) =>
-              prev.map((r, i2) => i2 === idx ? updated : r)
-            );
+            setResults((prev) => prev.map((r, i2) => i2 === idx ? updated : r));
           } catch {
             const updated: WhoisResult = { ...finalResults[idx], status: "error", errorMessage: "Request failed" };
             finalResults[idx] = updated;
-            setResults((prev) =>
-              prev.map((r, i2) => i2 === idx ? updated : r)
-            );
+            setResults((prev) => prev.map((r, i2) => i2 === idx ? updated : r));
           }
           processed++;
           setProcessedCount(processed);
@@ -232,45 +208,81 @@ export default function Home() {
 
     setIsSearching(false);
 
-    // Start availability check for not_found domains
-    if (!abortRef.current) {
-      const notFoundDomains = finalResults.filter((r) => r.status === "not_found");
-      if (notFoundDomains.length > 0) {
-        runAvailabilityCheck(notFoundDomains);
-      }
+    if (!abortRef.current && finalResults.length > 0) {
+      // Build initial avail rows for ALL domains (regardless of .us status)
+      const rows: AvailRow[] = finalResults.map((r) => ({
+        domain: r.domain.replace(/\.us$/i, ""),
+        usDomain: r.domain,
+        usStatus: r.status,
+        email: r.email,
+        comStatus: "pending",
+      }));
+      setAvailRows(rows);
+      runComCheck(rows, finalResults);
     }
   }, [domainInput]);
 
-  const runAvailabilityCheck = async (notFoundResults: WhoisResult[]) => {
+  const runComCheck = async (rows: AvailRow[], whoisResults: WhoisResult[]) => {
     setIsCheckingAvail(true);
-    setAvailChecked(false);
+    setAvailDone(false);
 
-    const initial: DomainAvailability[] = notFoundResults.map((r) => ({
-      domain: r.domain.replace(/\.us$/i, ""),
-      email: r.email,
-      tlds: Object.fromEntries(AVAILABILITY_TLDS.map((t) => [t, "checking" as AvailStatus])),
-    }));
-    setAvailability(initial);
+    // Mark all as checking
+    setAvailRows((prev) => prev.map((r) => ({ ...r, comStatus: "checking" })));
 
-    // Check all TLDs for all domains concurrently
-    const updates = initial.map(async (entry, i) => {
-      const tldResults = await Promise.all(
-        AVAILABILITY_TLDS.map(async (tld) => {
-          const status = await checkTldAvailability(entry.domain, tld);
-          setAvailability((prev) =>
-            prev.map((a, ai) =>
-              ai === i ? { ...a, tlds: { ...a.tlds, [tld]: status } } : a
-            )
-          );
-          return [tld, status] as [string, AvailStatus];
-        })
-      );
-      return tldResults;
-    });
+    const domainNames = rows.map((r) => r.domain);
 
-    await Promise.all(updates);
+    // Call in batches of 10 to avoid overloading the edge function
+    const BATCH = 10;
+    for (let i = 0; i < domainNames.length; i += BATCH) {
+      if (abortRef.current) break;
+      const batch = domainNames.slice(i, i + BATCH);
+      const batchStart = i;
+
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/check-availability`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+            "Apikey": SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ domains: batch }),
+        });
+        const data = await res.json() as { results: { domain: string; status: ComStatus }[] };
+
+        if (data.results) {
+          setAvailRows((prev) => {
+            const next = [...prev];
+            data.results.forEach((item) => {
+              // Also update email from latest whois result in case it came in later
+              const whoisMatch = whoisResults.find((w) => w.domain.replace(/\.us$/i, "") === item.domain);
+              const idx = next.findIndex((r) => r.domain === item.domain);
+              if (idx !== -1) {
+                next[idx] = {
+                  ...next[idx],
+                  comStatus: item.status,
+                  email: whoisMatch?.email ?? next[idx].email,
+                  usStatus: whoisMatch?.status ?? next[idx].usStatus,
+                };
+              }
+            });
+            return next;
+          });
+        }
+      } catch {
+        // Mark batch as error
+        setAvailRows((prev) => {
+          const next = [...prev];
+          for (let j = batchStart; j < batchStart + batch.length && j < next.length; j++) {
+            next[j] = { ...next[j], comStatus: "error" };
+          }
+          return next;
+        });
+      }
+    }
+
     setIsCheckingAvail(false);
-    setAvailChecked(true);
+    setAvailDone(true);
   };
 
   const handleStop = () => {
@@ -284,39 +296,28 @@ export default function Home() {
     setProcessedCount(0);
     setTotalCount(0);
     setIsSearching(false);
-    setAvailability([]);
-    setAvailChecked(false);
+    setAvailRows([]);
+    setAvailDone(false);
   };
 
-  const downloadCSV = () => {
+  const downloadWhoisCSV = () => {
     const rows = results.filter((r) => r.status === "found" || r.status === "not_found");
     if (rows.length === 0) return;
 
     const formatDomain = (d: string) => {
       const base = d.replace(/\.us$/i, "");
-      const titleCased = base
-        .split("-")
-        .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
-        .join("-");
-      return `${titleCased}.com`;
+      return base.split("-").map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1)).join("-") + ".com";
     };
 
     const csv = [
       ["Domain", "Expires On", "Registrar", "Registrant Name", "Registrant Org", "Registrant Email", "Country"].join(","),
       ...rows.map((r) =>
-        [
-          formatDomain(r.domain),
-          r.expiresOn || "",
-          r.registrar || "",
-          r.registrantName || "",
-          r.registrantOrg || "",
-          r.email || "",
-          r.country || "",
-        ]
+        [formatDomain(r.domain), r.expiresOn || "", r.registrar || "", r.registrantName || "", r.registrantOrg || "", r.email || "", r.country || ""]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
       ),
     ].join("\n");
+
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     a.download = `whois-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -324,41 +325,27 @@ export default function Home() {
   };
 
   const downloadAvailableCSV = () => {
-    // Rows where at least one TLD is available
-    const rows: string[][] = [];
-    rows.push(["Domain Name", "Available TLDs", "Registrant Email (from .us WHOIS)"]);
+    const available = availRows.filter((r) => r.comStatus === "available");
+    if (available.length === 0) return;
 
-    for (const entry of availability) {
-      const availTlds = AVAILABILITY_TLDS.filter((t) => entry.tlds[t] === "available");
-      if (availTlds.length === 0) continue;
+    const csv = [
+      ["Domain (.com)", "Domain (.us)", ".us Status", "Registrant Email"].join(","),
+      ...available.map((r) => {
+        const comDomain = r.domain.split("-").map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1)).join("-") + ".com";
+        return [comDomain, r.usDomain, r.usStatus, r.email || ""]
+          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+          .join(",");
+      }),
+    ].join("\n");
 
-      const titleCased = entry.domain
-        .split("-")
-        .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
-        .join("-");
-
-      rows.push([
-        titleCased,
-        availTlds.join(" "),
-        entry.email || "",
-      ].map((v) => `"${String(v).replace(/"/g, '""')}"`));
-    }
-
-    if (rows.length <= 1) return;
-
-    const csv = rows.map((r) => r.join(",")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
-    a.download = `available-domains-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `available-com-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
   };
 
-  const availableCount = availability.reduce((sum, entry) => {
-    const hasAvail = AVAILABILITY_TLDS.some((t) => entry.tlds[t] === "available");
-    return sum + (hasAvail ? 1 : 0);
-  }, 0);
-
   const hasResults = results.length > 0;
+
   useEffect(() => {
     if (hasResults && tableRef.current) {
       tableRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -366,10 +353,10 @@ export default function Home() {
   }, [hasResults]);
 
   useEffect(() => {
-    if (availChecked && availRef.current) {
-      availRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (availDone && availRef.current) {
+      availRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
-  }, [availChecked]);
+  }, [availDone]);
 
   return (
     <div className="min-h-screen grid-bg" style={{ background: "var(--surface)" }}>
@@ -503,8 +490,7 @@ export default function Home() {
             <div className="flex-1" />
             {(foundCount > 0 || notFoundCount > 0) && !isSearching && (
               <button
-                onClick={downloadCSV}
-                disabled={foundCount === 0 && notFoundCount === 0}
+                onClick={downloadWhoisCSV}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{ background: "rgba(14,165,233,0.08)", border: "1px solid rgba(14,165,233,0.2)", color: "var(--cyan)" }}
                 data-testid="button-download"
@@ -536,22 +522,20 @@ export default function Home() {
                   {results.map((r, idx) => (
                     <tr key={r.domain} className="row-animate" style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }} data-testid={`row-result-${r.domain}`}>
                       <td className="mono" style={{ color: "hsl(var(--muted-foreground))", width: "40px" }}>{idx + 1}</td>
-                      <td className="mono font-medium" style={{ color: "hsl(var(--foreground))" }} data-testid={`text-domain-${r.domain}`}>
-                        {r.domain}
-                      </td>
+                      <td className="mono font-medium" style={{ color: "hsl(var(--foreground))" }}>{r.domain}</td>
                       <td><StatusBadge status={r.status} /></td>
-                      <td className="mono text-xs" style={{ color: r.expiresOn ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }} data-testid={`text-expires-${r.domain}`}>
+                      <td className="mono text-xs" style={{ color: r.expiresOn ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
                         {r.expiresOn || "—"}
                       </td>
-                      <td className="text-xs" style={{ color: r.registrar ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }} data-testid={`text-registrar-${r.domain}`}>
+                      <td className="text-xs" style={{ color: r.registrar ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }}>
                         <span className="truncate block" title={r.registrar || undefined}>{r.registrar || "—"}</span>
                       </td>
-                      <td className="text-xs" style={{ color: (r.registrantName || r.registrantOrg) ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }} data-testid={`text-registrant-${r.domain}`}>
+                      <td className="text-xs" style={{ color: (r.registrantName || r.registrantOrg) ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", maxWidth: "180px" }}>
                         <span className="truncate block" title={r.registrantOrg || r.registrantName || undefined}>
                           {r.registrantOrg || r.registrantName || "—"}
                         </span>
                       </td>
-                      <td className="mono text-xs" style={{ color: r.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }} data-testid={`text-email-${r.domain}`}>
+                      <td className="mono text-xs" style={{ color: r.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }}>
                         <span className="truncate block" title={r.email || undefined}>{r.email || "—"}</span>
                       </td>
                       <td className="text-xs" style={{ color: r.country ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
@@ -565,89 +549,81 @@ export default function Home() {
           </div>
         )}
 
-        {/* Domain Availability Checker */}
-        {availability.length > 0 && (
+        {/* .com Availability Section — appears as soon as whois search finishes */}
+        {availRows.length > 0 && (
           <div ref={availRef} className="fade-in">
-            {/* Section header */}
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <div className="flex items-center gap-2">
-                <ShieldCheck size={16} style={{ color: "var(--cyan)" }} />
-                <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-                  Domain Availability
-                </span>
-                <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "rgba(14,165,233,0.08)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.15)" }}>
-                  {availability.length} domain{availability.length !== 1 ? "s" : ""} checked
-                </span>
-                {isCheckingAvail && (
-                  <span className="inline-flex items-center gap-1 text-xs mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-                    <RefreshCw size={10} className="animate-spin" /> scanning…
+            <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--line)" }}>
+              {/* Section header */}
+              <div className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: "var(--line)", background: "var(--surface-2)" }}>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={15} style={{ color: "var(--cyan)" }} />
+                  <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
+                    .com Availability
                   </span>
+                  {isCheckingAvail && (
+                    <span className="inline-flex items-center gap-1.5 text-xs mono px-2 py-0.5 rounded"
+                      style={{ background: "rgba(14,165,233,0.08)", color: "var(--cyan)", border: "1px solid rgba(14,165,233,0.15)" }}>
+                      <RefreshCw size={10} className="animate-spin" /> Checking…
+                    </span>
+                  )}
+                  {availDone && (
+                    <span className="text-xs mono px-2 py-0.5 rounded"
+                      style={{ background: "rgba(34,197,94,0.08)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                      {availableComCount} available
+                    </span>
+                  )}
+                </div>
+                {availDone && availableComCount > 0 && (
+                  <button
+                    onClick={downloadAvailableCSV}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                    style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.25)", color: "var(--green)" }}
+                  >
+                    <Download size={14} /> Download Available .com ({availableComCount})
+                  </button>
                 )}
               </div>
-              {availChecked && availableCount > 0 && (
-                <button
-                  onClick={downloadAvailableCSV}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", color: "var(--green)" }}
-                >
-                  <Download size={14} /> Download Available ({availableCount})
-                </button>
-              )}
-            </div>
 
-            <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--line)" }}>
               <div className="overflow-x-auto">
                 <table className="data-table w-full">
                   <thead>
                     <tr>
                       <th style={{ textAlign: "left" }}>#</th>
                       <th style={{ textAlign: "left" }}>Domain</th>
+                      <th style={{ textAlign: "left" }}>.us Status</th>
+                      <th style={{ textAlign: "left" }}>.com Available?</th>
                       <th style={{ textAlign: "left" }}>Email (.us WHOIS)</th>
-                      {AVAILABILITY_TLDS.map((tld) => (
-                        <th key={tld} style={{ textAlign: "center" }} className="mono">{tld}</th>
-                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {availability.map((entry, idx) => {
-                      const hasAnyAvail = AVAILABILITY_TLDS.some((t) => entry.tlds[t] === "available");
-                      return (
-                        <tr
-                          key={entry.domain}
-                          className="row-animate"
-                          style={{
-                            animationDelay: `${Math.min(idx * 30, 200)}ms`,
-                            background: hasAnyAvail ? "rgba(34,197,94,0.03)" : undefined,
-                          }}
-                        >
-                          <td className="mono" style={{ color: "hsl(var(--muted-foreground))", width: "40px" }}>{idx + 1}</td>
-                          <td className="mono font-medium" style={{ color: hasAnyAvail ? "var(--green)" : "hsl(var(--foreground))" }}>
-                            {entry.domain}
-                            {hasAnyAvail && (
-                              <span className="ml-2 text-xs" style={{ color: "var(--green)", opacity: 0.7 }}>★</span>
-                            )}
-                          </td>
-                          <td className="mono text-xs" style={{ color: entry.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "220px" }}>
-                            <span className="truncate block" title={entry.email || undefined}>{entry.email || "—"}</span>
-                          </td>
-                          {AVAILABILITY_TLDS.map((tld) => (
-                            <td key={tld} style={{ textAlign: "center" }}>
-                              <AvailBadge status={entry.tlds[tld]} />
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
+                    {availRows.map((row, idx) => (
+                      <tr
+                        key={row.domain}
+                        className="row-animate"
+                        style={{
+                          animationDelay: `${Math.min(idx * 20, 200)}ms`,
+                          background: row.comStatus === "available" ? "rgba(34,197,94,0.03)" : undefined,
+                        }}
+                      >
+                        <td className="mono" style={{ color: "hsl(var(--muted-foreground))", width: "40px" }}>{idx + 1}</td>
+                        <td>
+                          <div className="flex items-center gap-2">
+                            <span className="mono font-medium text-sm" style={{ color: row.comStatus === "available" ? "var(--green)" : "hsl(var(--foreground))" }}>
+                              {row.domain}.com
+                            </span>
+                          </div>
+                        </td>
+                        <td><StatusBadge status={row.usStatus} /></td>
+                        <td><ComBadge status={row.comStatus} /></td>
+                        <td className="mono text-xs" style={{ color: row.email ? "var(--cyan)" : "hsl(var(--muted-foreground))", maxWidth: "240px" }}>
+                          <span className="truncate block" title={row.email || undefined}>{row.email || "—"}</span>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
             </div>
-
-            {availChecked && availableCount === 0 && (
-              <p className="text-xs mt-3 text-center mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-                No available domains found across .com / .net / .org / .io
-              </p>
-            )}
           </div>
         )}
 
