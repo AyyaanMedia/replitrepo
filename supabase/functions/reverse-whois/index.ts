@@ -10,6 +10,7 @@ interface Domain {
   domainName: string;
   date?: string;
   registrar?: string;
+  country?: string;
 }
 
 interface Result {
@@ -27,7 +28,7 @@ const UAS = [
 ];
 const ua = () => UAS[Math.floor(Math.random() * UAS.length)];
 
-// ─── ViewDNS.info HTML scrape (unlimited, free) ───────────────────────────────
+// ─── ViewDNS.info HTML scrape ─────────────────────────────────────────────────
 async function fromViewDNS(email: string): Promise<Result> {
   const url = `https://viewdns.info/reversewhois/?q=${encodeURIComponent(email)}`;
   const res = await fetch(url, {
@@ -52,7 +53,6 @@ async function fromViewDNS(email: string): Promise<Result> {
 
   const domains: Domain[] = [];
 
-  // Find table rows: <td>domain.tld</td><td>date</td>
   const rowRe = /<tr[^>]*>\s*<td[^>]*>([a-zA-Z0-9][\w.-]{1,62}\.[a-zA-Z]{2,})<\/td>\s*<td[^>]*>([^<]*)<\/td>/gi;
   let m: RegExpExecArray | null;
   while ((m = rowRe.exec(html)) !== null) {
@@ -62,7 +62,6 @@ async function fromViewDNS(email: string): Promise<Result> {
     }
   }
 
-  // Broader fallback — any cell with a domain-like value
   if (domains.length === 0) {
     const cellRe = /<td[^>]*>\s*([a-zA-Z0-9][\w-]{1,62}\.[a-zA-Z]{2,})\s*<\/td>/gi;
     while ((m = cellRe.exec(html)) !== null) {
@@ -75,13 +74,13 @@ async function fromViewDNS(email: string): Promise<Result> {
     if (/no results|0 results|not found|no domains/i.test(html)) {
       return { source: "viewdns", email, count: 0, domains: [] };
     }
-    throw new Error("ViewDNS: unable to parse results — site may have changed");
+    throw new Error("ViewDNS: unable to parse results");
   }
 
   return { source: "viewdns", email, count: domains.length, domains };
 }
 
-// ─── HackerTarget reverse WHOIS (free tier: 100/day, no signup) ──────────────
+// ─── HackerTarget reverse WHOIS ───────────────────────────────────────────────
 async function fromHackerTarget(email: string): Promise<Result> {
   const url = `https://api.hackertarget.com/reversewhois/?q=${encodeURIComponent(email)}`;
   const res = await fetch(url, {
@@ -104,9 +103,9 @@ async function fromHackerTarget(email: string): Promise<Result> {
   return { source: "hackertarget", email, count: lines.length, domains: lines.map(d => ({ domainName: d })) };
 }
 
-// ─── Whoxy API (key in env, free trial credits available) ────────────────────
+// ─── Whoxy API ────────────────────────────────────────────────────────────────
 async function fromWhoxy(email: string): Promise<Result> {
-  const key = Deno.env.get("WHOXY_API_KEY") || "dab4acf08fce422hhqce0041174165766";
+  const key = Deno.env.get("WHOXY_API_KEY") || "f0634a5b032fe6276yd5c4637f3bb9150";
   const base = `https://api.whoxy.com/?key=${key}&reverse=whois&email=${encodeURIComponent(email)}&mode=micro`;
 
   const res = await fetch(base, { signal: AbortSignal.timeout(20000) });
@@ -119,6 +118,7 @@ async function fromWhoxy(email: string): Promise<Result> {
       domainName: r.domain_name || "",
       date: r.create_date || r.update_date || undefined,
       registrar: r.domain_registrar?.registrar_name || undefined,
+      country: r.registrant_contact?.country_name || r.registrant_contact?.country || undefined,
     })).filter((d: Domain) => d.domainName);
 
   const domains = parse(data.search_result || []);
@@ -138,7 +138,7 @@ async function fromWhoxy(email: string): Promise<Result> {
   return { source: "whoxy", email, count: data.total_results ?? domains.length, domains };
 }
 
-// ─── WhoisXML preview (free credits on new account) ──────────────────────────
+// ─── WhoisXML preview ─────────────────────────────────────────────────────────
 async function fromWhoisXML(email: string): Promise<Result> {
   const key = Deno.env.get("WHOISXML_API_KEY") || "";
   if (!key) throw new Error("No WhoisXML key");
@@ -183,9 +183,9 @@ Deno.serve(async (req: Request) => {
 
     const errors: string[] = [];
     const sources: [string, () => Promise<Result>][] = [
+      ["Whoxy", () => fromWhoxy(email)],
       ["ViewDNS", () => fromViewDNS(email)],
       ["HackerTarget", () => fromHackerTarget(email)],
-      ["Whoxy", () => fromWhoxy(email)],
       ["WhoisXML", () => fromWhoisXML(email)],
     ];
 

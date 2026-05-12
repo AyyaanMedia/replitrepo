@@ -9,10 +9,11 @@ interface Domain {
   domainName: string;
   date?: string;
   registrar?: string;
+  country?: string;
 }
 
 interface ReverseWhoisResult {
-  source: "whoisxml" | "viewdns" | "none";
+  source: string;
   email: string;
   count: number;
   domains: Domain[];
@@ -53,9 +54,9 @@ export default function ReverseWhois() {
   const downloadCSV = () => {
     if (!result || result.domains.length === 0) return;
     const csv = [
-      ["Domain", "Registered Date", "Registrar"].join(","),
+      ["Domain", "Registered Date", "Registrar", "Country"].join(","),
       ...result.domains.map((d) =>
-        [d.domainName, d.date || "", d.registrar || ""]
+        [d.domainName, d.date || "", d.registrar || "", d.country || ""]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",")
       ),
@@ -67,8 +68,10 @@ export default function ReverseWhois() {
   };
 
   const sourceLabel: Record<string, string> = {
+    whoxy: "Whoxy",
     whoisxml: "WhoisXML API",
     viewdns: "ViewDNS.info",
+    hackertarget: "HackerTarget",
     none: "No source",
   };
 
@@ -196,7 +199,7 @@ export default function ReverseWhois() {
                   </span>
                 )}
                 <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "var(--surface-3)", color: "hsl(var(--muted-foreground))", border: "1px solid var(--line)" }}>
-                  via {sourceLabel[result.source]}
+                  via {sourceLabel[result.source] ?? result.source}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -218,7 +221,7 @@ export default function ReverseWhois() {
                 <Info size={13} className="mt-0.5 shrink-0" style={{ color: "var(--amber)" }} />
                 <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
                   <span style={{ color: "var(--amber)" }}>{result.count.toLocaleString()} domains</span> are registered under this email.
-                  {result.domains.length < result.count && ` Showing the first ${result.domains.length.toLocaleString()} results. To get all results, a paid WhoisXML API plan is required.`}
+                  {result.domains.length < result.count && ` Showing the first ${result.domains.length.toLocaleString()} results.`}
                 </p>
               </div>
             )}
@@ -240,6 +243,7 @@ export default function ReverseWhois() {
                         <th style={{ textAlign: "left" }}>Domain</th>
                         <th style={{ textAlign: "left" }}>Registered</th>
                         <th style={{ textAlign: "left" }}>Registrar</th>
+                        <th style={{ textAlign: "left" }}>Country</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -252,6 +256,9 @@ export default function ReverseWhois() {
                           </td>
                           <td className="text-xs" style={{ color: "hsl(var(--muted-foreground))", maxWidth: "200px" }}>
                             <span className="truncate block" title={d.registrar}>{d.registrar || "—"}</span>
+                          </td>
+                          <td className="text-xs" style={{ color: d.country ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))" }}>
+                            {d.country || "—"}
                           </td>
                         </tr>
                       ))}
@@ -273,7 +280,7 @@ export default function ReverseWhois() {
               Enter a registrant email to find all domains registered under it
             </p>
             <p className="text-xs mt-1 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Searches ViewDNS.info · WhoisXML across the entire domain registry
+              Searches Whoxy · ViewDNS.info · HackerTarget across the entire domain registry
             </p>
           </div>
         )}
