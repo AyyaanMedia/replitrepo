@@ -150,6 +150,3 @@ export default function LockScreen({ children }: Props) {
     </div>
   );
 }
-
-
-export default LockScreen
