@@ -23,12 +23,15 @@ interface Filters {
   comAvailable: boolean;
 }
 
+// Returns full domain strings — preserves user TLD, defaults to .us when none given
 function parseDomains(input: string): string[] {
+  const TLD_RE = /\.[a-z]{2,10}$/i;
   return input
-    .split(/[\n,\s]+/)
-    .map((d) => d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, ""))
-    .filter((d) => d.length > 0)
-    .map((d) => (d.endsWith(".us") ? d.slice(0, -3) : d))
+    .split(/[\n,]+/)
+    .flatMap((line) => line.split(/\s+/))
+    .map((d) => d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\/.*$/, ""))
+    .filter((d) => d.length > 0 && d.includes(".") ? d.split(".").length >= 2 : d.length > 0)
+    .map((d) => (TLD_RE.test(d) ? d : `${d}.us`))
     .filter((d, i, arr) => arr.indexOf(d) === i);
 }
 
@@ -158,7 +161,7 @@ export default function Home() {
   // Lookup comStatus by domain name for filter
   const comStatusMap = useMemo(() => {
     const map = new Map<string, ComStatus>();
-    availRows.forEach((r) => map.set(r.usDomain, r.comStatus));
+    availRows.forEach((r) => map.set(r.usDomain, r.comStatus)); // keyed by full domain e.g. "example.us"
     return map;
   }, [availRows]);
 
@@ -196,7 +199,7 @@ export default function Home() {
     clearFilters();
 
     const initialResults: WhoisResult[] = domList.map((d) => ({
-      domain: `${d}.us`,
+      domain: d,
       status: "pending",
       expiresOn: null,
       registrar: null,
@@ -232,7 +235,7 @@ export default function Home() {
                 "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
                 "Apikey": SUPABASE_ANON_KEY,
               },
-              body: JSON.stringify({ domain: `${domain}.us`, sessionId: sessionId.current }),
+              body: JSON.stringify({ domain, sessionId: sessionId.current }),
             });
             const data = await res.json();
             const updated: WhoisResult = {
@@ -263,7 +266,7 @@ export default function Home() {
 
     if (!abortRef.current && finalResults.length > 0) {
       const rows: AvailRow[] = finalResults.map((r) => ({
-        domain: r.domain.replace(/\.us$/i, ""),
+        domain: r.domain.replace(/\.[^.]+$/, ""), // strip TLD to get bare name
         usDomain: r.domain,
         usStatus: r.status,
         email: r.email,
@@ -303,7 +306,7 @@ export default function Home() {
           setAvailRows((prev) => {
             const next = [...prev];
             data.results.forEach((item) => {
-              const whoisMatch = whoisResults.find((w) => w.domain.replace(/\.us$/i, "") === item.domain);
+              const whoisMatch = whoisResults.find((w) => w.domain.replace(/\.[^.]+$/, "") === item.domain);
               const idx = next.findIndex((r) => r.domain === item.domain);
               if (idx !== -1) {
                 next[idx] = {
@@ -440,11 +443,11 @@ export default function Home() {
             <Zap size={11} /> Parallel RDAP + WHOIS lookups · No API key required
           </div>
           <h1 className="text-3xl font-bold tracking-tight mb-2" style={{ color: "hsl(var(--foreground))" }}>
-            Bulk .us Domain{" "}
+            Bulk Domain{" "}
             <span className="glow-text" style={{ color: "var(--cyan)" }}>WHOIS Scout</span>
           </h1>
           <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
-            Look up registration details, expiry dates, and contact emails for multiple .us domains at once
+            Look up registration details, expiry dates, and contact emails for any domain — defaults to .us when no extension given
           </p>
         </div>
 
@@ -461,7 +464,7 @@ export default function Home() {
             <textarea
               className="domain-input w-full rounded-lg p-3"
               style={{ height: "140px" }}
-              placeholder={"example\nmydomain\ntestsite\n\n# One per line or comma-separated, .us added automatically"}
+              placeholder={"example\nmydomain.com\ntestsite.org\n\n# One per line or comma-separated\n# No extension = .us added automatically"}
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
               disabled={isSearching}
@@ -809,7 +812,7 @@ export default function Home() {
               Enter .us domains above and hit <strong style={{ color: "hsl(var(--foreground))" }}>Start Search</strong>
             </p>
             <p className="text-xs mt-1 mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Queries RDAP · Who-Dat · WhoisJSON simultaneously
+              Any TLD supported · defaults to .us · RDAP + WhoisJSON
             </p>
           </div>
         )}

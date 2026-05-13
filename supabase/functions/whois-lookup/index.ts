@@ -47,6 +47,27 @@ function isValidEmail(e: string | null | undefined): boolean {
   return !!e && e.includes("@") && !e.startsWith("@") && e.length > 5;
 }
 
+// Returns RDAP endpoint URLs to try for a given domain, ordered by specificity
+function rdapEndpoints(domain: string): string[] {
+  const tld = domain.split(".").pop()?.toLowerCase() ?? "";
+  const base: Record<string, string[]> = {
+    us: [
+      `https://rdap.nic.us/domain/${encodeURIComponent(domain)}`,
+      `https://rdap.verisign.com/us/v1/domain/${encodeURIComponent(domain)}`,
+    ],
+    com: [`https://rdap.verisign.com/com/v1/domain/${encodeURIComponent(domain)}`],
+    net: [`https://rdap.verisign.com/net/v1/domain/${encodeURIComponent(domain)}`],
+    org: [`https://rdap.publicinterestregistry.org/rdap/domain/${encodeURIComponent(domain)}`],
+    io:  [`https://rdap.iana.org/domain/${encodeURIComponent(domain)}`],
+    co:  [`https://rdap.iana.org/domain/${encodeURIComponent(domain)}`],
+    info:[`https://rdap.afilias.net/rdap/info/domain/${encodeURIComponent(domain)}`],
+    biz: [`https://rdap.iana.org/domain/${encodeURIComponent(domain)}`],
+    gov: [`https://rdap.iana.org/domain/${encodeURIComponent(domain)}`],
+  };
+  // Fallback: IANA bootstrap for anything else
+  return base[tld] ?? [`https://rdap.iana.org/domain/${encodeURIComponent(domain)}`];
+}
+
 async function fromApiLayer(domain: string): Promise<WhoisResult> {
   for (let ki = 0; ki < APILAYER_KEYS.length; ki++) {
     const key = APILAYER_KEYS[ki];
@@ -86,10 +107,7 @@ async function fromApiLayer(domain: string): Promise<WhoisResult> {
 }
 
 async function fromRdap(domain: string): Promise<WhoisResult> {
-  const endpoints = [
-    `https://rdap.nic.us/domain/${encodeURIComponent(domain)}`,
-    `https://rdap.verisign.com/us/v1/domain/${encodeURIComponent(domain)}`,
-  ];
+  const endpoints = rdapEndpoints(domain);
 
   for (const url of endpoints) {
     try {
@@ -109,7 +127,10 @@ async function fromRdap(domain: string): Promise<WhoisResult> {
       }
 
       let registrar: string | null = null;
+      let registrantName: string | null = null;
+      let registrantOrg: string | null = null;
       let email: string | null = null;
+      let country: string | null = null;
 
       const getEmail = (vcard: any): string | null => {
         if (!Array.isArray(vcard?.[1])) return null;
@@ -121,20 +142,43 @@ async function fromRdap(domain: string): Promise<WhoisResult> {
         const e = vcard[1].find((v: any) => v[0] === "fn");
         return e?.[3] || null;
       };
+      const getOrg = (vcard: any): string | null => {
+        if (!Array.isArray(vcard?.[1])) return null;
+        const e = vcard[1].find((v: any) => v[0] === "org");
+        return e?.[3] || null;
+      };
+      const getCountry = (vcard: any): string | null => {
+        if (!Array.isArray(vcard?.[1])) return null;
+        const adr = vcard[1].find((v: any) => v[0] === "adr");
+        // adr value array: [pobox, ext, street, city, state, postal, country]
+        return adr?.[3]?.[6] || null;
+      };
 
       if (Array.isArray(d.entities)) {
+        // Registrant
+        const registrant = d.entities.find((e: any) => e.roles?.includes("registrant"));
+        if (registrant) {
+          registrantName = getName(registrant.vcardArray);
+          registrantOrg = getOrg(registrant.vcardArray);
+          country = getCountry(registrant.vcardArray);
+          const re = getEmail(registrant.vcardArray);
+          if (isValidEmail(re)) email = re;
+        }
+
+        // Registrar
         const reg = d.entities.find((e: any) => e.roles?.includes("registrar"));
         if (reg) {
           registrar = getName(reg.vcardArray) || reg.handle || null;
-          const abuseEnt = (reg.entities || []).find((s: any) => s.roles?.includes("abuse"));
-          const ae = getEmail(abuseEnt?.vcardArray);
-          if (isValidEmail(ae)) email = ae;
-          else email = getEmail(reg.vcardArray);
+          if (!isValidEmail(email)) {
+            const abuseEnt = (reg.entities || []).find((s: any) => s.roles?.includes("abuse"));
+            const ae = getEmail(abuseEnt?.vcardArray);
+            email = isValidEmail(ae) ? ae : (getEmail(reg.vcardArray) ?? null);
+          }
         }
       }
 
-      if (expiresOn || registrar) {
-        return { found: true, expiresOn, registrar, registrantName: null, registrantOrg: null, email, country: null };
+      if (expiresOn || registrar || registrantName) {
+        return { found: true, expiresOn, registrar, registrantName, registrantOrg, email, country };
       }
     } catch { continue; }
   }
@@ -163,7 +207,6 @@ async function saveHistory(
   sessionId: string,
   keyIndexUsed: number | undefined,
 ) {
-  // Save lookup to history
   await supabase.from("lookup_history").insert({
     domain,
     status,
@@ -175,7 +218,6 @@ async function saveHistory(
     session_id: sessionId,
   });
 
-  // Track API credit if APILayer was used
   if (keyIndexUsed !== undefined) {
     const today = new Date().toISOString().slice(0, 10);
     const { data: existing } = await supabase
@@ -199,7 +241,6 @@ async function saveHistory(
     }
   }
 
-  // Delete history older than 7 days
   const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   await supabase.from("lookup_history").delete().lt("looked_up_at", cutoff);
 }
